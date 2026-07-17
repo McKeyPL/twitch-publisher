@@ -1,0 +1,84 @@
+# Wszystkie sciezki moga zostac nadpisane argumentami CLI w kolejnych etapach.
+paths:
+  recordings_root: 'E:\TwitchRecordings'
+  ffprobe: ffprobe
+  database: data/upload_state.sqlite3
+  log_directory: logs
+  auth_directory: auth
+
+watcher:
+  poll_interval_seconds: 30
+  # Drugi pomiar rozmiaru MKV musi nastapic co najmniej po tym czasie.
+  size_stability_seconds: 60
+
+platforms:
+  youtube:
+    enabled: true
+    # Pusta wartosc jest dozwolona tylko gdy enabled=false; config.py waliduje to pole.
+    client_secrets_file: ${YOUTUBE_CLIENT_SECRETS_FILE:-}
+    token_file: auth/youtube_token.json
+    privacy_status: unlisted
+    max_duration_hours: 12
+    title_limit: 100
+    category_id: "20" # Gaming
+    captions_language: pl
+    captions_name: "Czat Twitch"
+    # Granularny bucket videos.insert: domyslnie 100 wywolan/dzien, koszt 1/call.
+    daily_upload_limit: 100
+    daily_quota_units: 10000
+    # To liczniki aplikacji; zrodlem prawdy zawsze pozostaje Google Cloud Console.
+    upload_quota_units: 1
+    captions_quota_units: 400
+    srt_max_size_mb: 100
+    playlists:
+      mrozopl: ${YT_PLAYLIST_MROZOPL:-}
+      jellysketch: ${YT_PLAYLIST_JELLYSKETCH:-}
+      ctsg: ${YT_PLAYLIST_CTSG:-}
+      jalowy_gracz: ${YT_PLAYLIST_JALOWY_GRACZ:-}
+      perrydotto: ${YT_PLAYLIST_PERRYDOTTO:-}
+      buvanybu: ${YT_PLAYLIST_BUVANYBU:-}
+
+  cda:
+    enabled: true
+    # Formularz wyboru lokalnego pliku (potwierdzone w zalogowanej sesji).
+    upload_url: https://www.cda.pl/uploader_video
+    storage_state_file: auth/cda_state.json
+    # TODO: zweryfikowac manualnie aktualny limit tytulu i dlugosci filmu.
+    title_limit: null
+    max_duration_hours: null
+
+  rumble:
+    enabled: true
+    upload_url: https://rumble.com/upload.php
+    storage_state_file: auth/rumble_state.json
+    # TODO: zweryfikowac manualnie aktualny limit tytulu i dlugosci filmu.
+    title_limit: null
+    max_duration_hours: null
+
+browser:
+  # Opcjonalne. Puste = browser_cookie3 sam wyszuka domyslny profil Firefoksa.
+  firefox_profile_path: ${FIREFOX_PROFILE_PATH:-}
+  headless: true
+  interactive_login_headless: false
+
+metadata:
+  title_template: '{tytul_czysty} | {nick} | {data_YYYY-MM-DD}'
+  remove_bang_tags: true
+
+retry:
+  max_attempts: 3
+  initial_backoff_seconds: 5
+  multiplier: 2
+  max_backoff_seconds: 60
+
+moving:
+  uploaded_directory_name: _uploaded
+
+cleanup:
+  retention_days: 30
+  dry_run: true
+
+logging:
+  level: INFO
+  console_colors: true
+  file_name: twitch_publisher.log
