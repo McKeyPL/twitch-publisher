@@ -18,7 +18,12 @@ from uploaders.cda import (
     _set_radio_by_question,
 )
 from uploaders.base import UploadCancelled
-from uploaders.rumble import RumbleUploader, _rumble_result_url, _set_category_by_label
+from uploaders.rumble import (
+    RumbleUploader,
+    _accept_rumble_confirmation,
+    _rumble_result_url,
+    _set_category_by_label,
+)
 
 
 def retry() -> RetryConfig:
@@ -147,6 +152,45 @@ def test_rumble_success_url_comes_from_form3_not_page_navigation() -> None:
     )
 
     assert _rumble_result_url(page) == "https://rumble.com/vabc123-title.html"
+
+
+def test_rumble_hidden_confirmation_is_clicked_through_visible_label() -> None:
+    class Checkbox:
+        checked = False
+
+        def count(self):
+            return 1
+
+        def is_checked(self):
+            return self.checked
+
+    class Label:
+        def __init__(self, checkbox):
+            self.checkbox = checkbox
+
+        def count(self):
+            return 1
+
+        def is_visible(self):
+            return True
+
+        def click(self):
+            self.checkbox.checked = True
+
+    checkbox = Checkbox()
+    label = Label(checkbox)
+
+    class ConfirmationPage:
+        def locator(self, selector):
+            if selector == "#crights":
+                return checkbox
+            if selector == "label[for='crights'] > span":
+                return label
+            raise AssertionError(f"Nieoczekiwany selektor: {selector}")
+
+    _accept_rumble_confirmation(ConfirmationPage(), "crights")
+
+    assert checkbox.checked is True
 
 
 def test_cancel_token_stops_before_opening_browser(tmp_path: Path) -> None:

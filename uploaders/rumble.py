@@ -19,6 +19,7 @@ from uploaders.browser_form import (
     optional_visible_locator,
     report_manual_captions,
     should_retry_browser_error,
+    unique_locator,
     unique_visible_locator,
     validate_upload_files,
     video_id_from_url,
@@ -84,6 +85,41 @@ def _rumble_result_url(page: object) -> str:
         retriable=False,
         manual_review_required=True,
     )
+
+
+def _accept_rumble_confirmation(page: object, checkbox_id: str) -> None:
+    """Zaznacza stylowany checkbox Rumble przez jego widoczny element label.
+
+    Natywne inputy ``#crights`` i ``#cterms`` sa ukryte przez CSS. Klikniecie
+    etykiety uruchamia obsluge JavaScript strony, ktora aktualizuje rowniez
+    ukryte pola ``#rights``/``#terms`` uzywane podczas walidacji formularza.
+    """
+    checkbox = unique_locator(
+        page,
+        (f"#{checkbox_id}",),
+        f"potwierdzenia {checkbox_id}",
+    )
+    if checkbox.is_checked():
+        return
+
+    marker = optional_visible_locator(
+        page,
+        (
+            f"label[for='{checkbox_id}'] > span",
+            f"label[for='{checkbox_id}']",
+        ),
+    )
+    if marker is None:
+        raise BrowserUploadError(
+            f"Rumble: nie znaleziono widocznej kontrolki zgody {checkbox_id}",
+            retriable=False,
+        )
+    marker.click()
+    if not checkbox.is_checked():
+        raise BrowserUploadError(
+            f"Rumble: kontrolka zgody {checkbox_id} nie zostala zaznaczona",
+            retriable=False,
+        )
 
 
 class RumbleUploader(BaseUploader):
@@ -252,6 +288,7 @@ class RumbleUploader(BaseUploader):
                     page, "waiting_for_second_step"
                 ),
             )
+            self._debug_snapshot(page, "second_step_ready", force=True)
             license_option = self.config.license_option or ""
             license_control = unique_visible_locator(
                 page,
@@ -264,11 +301,14 @@ class RumbleUploader(BaseUploader):
                 license_option,
                 LICENSE_LABELS[license_option],
             )
-            for selector in ("#crights", "#cterms"):
-                checkbox = optional_visible_locator(page, (selector,))
-                if checkbox is not None:
-                    checkbox.set_checked(True)
+            for checkbox_id in ("crights", "cterms"):
+                _accept_rumble_confirmation(page, checkbox_id)
+            logger.info("rumble: zaakceptowano prawa do materialu i regulamin")
+            self._debug_snapshot(
+                page, "license_and_confirmations_ready", force=True
+            )
             final_submit.click()
+            self._debug_snapshot(page, "final_submit_clicked", force=True)
             success_form = page.locator("#form3")
             try:
                 wait_for_visible_with_heartbeat(
