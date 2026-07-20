@@ -1,4 +1,4 @@
-"""Uploader CDA oparty o aktualny, dwustopniowy formularz Playwright."""
+"""CDA uploader for the current two-step Playwright form."""
 
 from __future__ import annotations
 
@@ -51,7 +51,7 @@ def _clear_cda_stale_uploads(
     cancel_check: Callable[[], None] | None = None,
     timeout_seconds: float = 10.0,
 ) -> int:
-    """Usuwa zakończone/błędne karty z listy uploadu przed wyborem pliku."""
+    """Remove completed or failed cards before selecting another file."""
     removed = 0
     while True:
         if cancel_check is not None:
@@ -60,18 +60,18 @@ def _clear_cda_stale_uploads(
         before = buttons.count()
         if before == 0:
             if removed:
-                logger.info("cda: usunieto %d starych pozycji z listy uploadu", removed)
+                logger.info("cda: removed %d stale items from the upload list", removed)
             return removed
         button = buttons.first
         title = button.get_attribute("title") or "Usuń z listy"
         logger.info(
-            "cda: usuwam stara pozycje z listy uploadu (%s), pozostalo=%d",
+            "cda: removing stale upload-list item (%s), remaining=%d",
             title,
             before,
         )
-        # Stara karta bywa zwinięta i ikona nie ma wtedy pola w viewport. Handler
-        # krzyżyka nadal istnieje w DOM; selektor jest ściśle ograniczony do listy
-        # uploadów, dlatego wywołujemy natywne click() bez scrollowania strony.
+        # A stale card may be collapsed, leaving its icon outside the viewport. The
+        # close handler remains in the DOM; the selector is strictly scoped to the
+        # upload list, so native click() is safe without scrolling the page.
         button.evaluate("element => element.click()")
         deadline = time.monotonic() + timeout_seconds
         while getattr(page, "locator")(CDA_STALE_REMOVE_SELECTOR).count() >= before:
@@ -79,8 +79,8 @@ def _clear_cda_stale_uploads(
                 cancel_check()
             if time.monotonic() >= deadline:
                 raise BrowserUploadError(
-                    "CDA: kliknieto krzyzyk starego uploadu, ale pozycja nie "
-                    "zniknela z listy",
+                    "CDA clicked the stale-upload close icon, but the item "
+                    "did not disappear from the list",
                     retriable=True,
                 )
             time.sleep(0.2)
@@ -88,7 +88,7 @@ def _clear_cda_stale_uploads(
 
 
 def _find_cda_submit_button(page: object) -> object:
-    """Znajduje przycisk kończący publikację w obu znanych wariantach CDA."""
+    """Find the publication button in either known CDA variant."""
     return unique_visible_locator(
         page,
         (
@@ -99,12 +99,12 @@ def _find_cda_submit_button(page: object) -> object:
             "input[type='submit'][value*='Dodaj do serwisu']",
             "input[type='submit'][value*='Opublikuj']",
         ),
-        "przycisku Dodaj do serwisu",
+        "publication button",
     )
 
 
 def _read_cda_upload_status(page: object) -> dict[str, Any]:
-    """Czyta marker zakończenia oraz tekst panelu postępu bez zależności od ID."""
+    """Read completion markers and progress text without depending on an ID."""
     result = getattr(page, "evaluate")(
         r"""() => {
             const visible = element => {
@@ -195,7 +195,7 @@ def _wait_for_cda_upload_complete(
     timeout_ms: int = UPLOAD_TIMEOUT_MS,
     heartbeat_interval_ms: int = HEARTBEAT_INTERVAL_MS,
 ) -> dict[str, Any]:
-    """Czeka na gotowy przycisk publikacji i raportuje postęp/szybkość CDA."""
+    """Wait for publication readiness while reporting CDA progress and speed."""
     started = time.monotonic()
     deadline = started + timeout_ms / 1000
     next_heartbeat = started
@@ -205,20 +205,20 @@ def _wait_for_cda_upload_complete(
         status = _read_cda_upload_status(page)
         if status.get("success_url"):
             logger.info(
-                "cda: wykryto icon-file icon-success; URL filmu: %s",
+                "cda: detected icon-file icon-success; video URL: %s",
                 status["success_url"],
             )
             return status
         if status.get("duplicate_url"):
             logger.warning(
-                "cda: serwis rozpoznal duplikat; wykorzystuje istniejacy URL: %s",
+                "cda: service detected a duplicate; using existing URL: %s",
                 status["duplicate_url"],
             )
             return status
         if status.get("complete"):
             logger.info(
-                "cda: przesylanie zakonczone; formularz gotowy "
-                "(postep=%s, marker=%s, przycisk=%s)",
+                "cda: transfer completed; metadata form is ready "
+                "(progress=%s, marker=%s, button=%s)",
                 status.get("percent"),
                 status.get("complete_marker"),
                 status.get("submit_ready"),
@@ -227,16 +227,16 @@ def _wait_for_cda_upload_complete(
         now = time.monotonic()
         if now >= deadline:
             raise BrowserUploadError(
-                "CDA: przekroczono limit oczekiwania na zakonczenie przesylania",
+                "CDA timed out while waiting for transfer completion",
                 retriable=True,
             )
         if now >= next_heartbeat:
             details = status.get("details") or []
             logger.info(
-                "cda: przesylanie trwa (%.0f s), postep=%s; panel=%s",
+                "cda: transfer in progress (%.0f s), progress=%s; panel=%s",
                 now - started,
                 status.get("percent"),
-                " | ".join(str(item) for item in details) or "brak czytelnych danych",
+                " | ".join(str(item) for item in details) or "no readable data",
             )
             if heartbeat_probe is not None:
                 heartbeat_probe()
@@ -245,10 +245,10 @@ def _wait_for_cda_upload_complete(
 
 
 def _cda_result_url(page: object) -> str | None:
-    """Odczytuje link filmu z URL strony albo wyniku wyrenderowanego w DOM."""
+    """Read the video link from the page URL or the rendered result card."""
     candidates: list[str] = [str(getattr(page, "url", ""))]
-    # Nie skanujemy całej strony: nagłówek CDA zawiera linki /video/ z
-    # powiadomień, które nie są wynikiem bieżącego uploadu.
+    # Do not scan the entire page: CDA's header contains /video/ notification
+    # links that are unrelated to the current upload.
     locator = getattr(page, "locator")(
         "#uploader .fileListContainer "
         ".panel:has(.icon-file.icon-success) a[href*='/video/']"
@@ -284,19 +284,19 @@ def _wait_for_cda_result_url(
             cancel_check()
         url = _cda_result_url(page)
         if url:
-            logger.info("cda: publikacja potwierdzona, URL filmu: %s", url)
+            logger.info("cda: publication confirmed, video URL: %s", url)
             return url
         now = time.monotonic()
         if now >= deadline:
             raise BrowserUploadError(
-                "CDA: kliknieto Dodaj do serwisu, ale nie uzyskano linku filmu. "
-                "Sprawdz panel recznie; upload nie bedzie ponawiany.",
+                "CDA clicked the publication button but received no video link. "
+                "Check the dashboard manually; the upload will not be retried.",
                 retriable=False,
                 manual_review_required=True,
             )
         if now >= next_heartbeat:
             logger.info(
-                "cda: oczekuje na potwierdzenie i link filmu (%.0f s)",
+                "cda: waiting for confirmation and video link (%.0f s)",
                 now - started,
             )
             if heartbeat_probe is not None:
@@ -396,7 +396,7 @@ def _find_cda_title_input(page: object, video_path: Path) -> object:
         if score > 0:
             return candidate
     raise BrowserUploadError(
-        "CDA: formularz jest widoczny, ale nie znaleziono pola tytulu",
+        "CDA form is visible, but the title field was not found",
         retriable=False,
     )
 
@@ -463,7 +463,7 @@ class CDAUploader(BaseUploader):
                 should_retry=should_retry_browser_error,
             )
         except Exception as exc:
-            logger.error("cda: upload %s nie powiodl sie: %s", video_path, exc)
+            logger.error("cda: upload %s failed: %s", video_path, exc)
             return UploadResult(
                 success=False,
                 error_message=str(exc),
@@ -488,7 +488,7 @@ class CDAUploader(BaseUploader):
             )
             size_gib = video_path.stat().st_size / (1024 ** 3)
             logger.info(
-                "cda: sesja gotowa (%s); wskazuje plik %.2f GiB: %s",
+                "cda: session ready (%s); selecting %.2f GiB file: %s",
                 page.url,
                 size_gib,
                 video_path,
@@ -500,14 +500,14 @@ class CDAUploader(BaseUploader):
                     "#upload1 input[type='file']",
                     "input[type='file']:not(#miniatura):not([name='miniatura'])",
                 ),
-                "pliku wideo",
+                "video file",
             )
             file_input.set_input_files(str(video_path), timeout=60_000)
             self._raise_if_cancelled()
             self._debug_snapshot(page, "file_selected", force=True)
             logger.info(
-                "cda: plik przekazany formularzowi; oczekuje na zakonczenie "
-                "wysylania i formularz metadanych"
+                "cda: file submitted to the form; waiting for transfer completion "
+                "and the metadata form"
             )
 
             upload_status = _wait_for_cda_upload_complete(
@@ -524,7 +524,7 @@ class CDAUploader(BaseUploader):
                     page,
                     cancel_check=self._raise_if_cancelled,
                 )
-                logger.info("cda: upload zakonczony, URL filmu: %s", success_url)
+                logger.info("cda: upload completed, video URL: %s", success_url)
                 return UploadResult(
                     success=True,
                     platform_video_id=video_id_from_url(str(success_url)),
@@ -537,7 +537,7 @@ class CDAUploader(BaseUploader):
                     cancel_check=self._raise_if_cancelled,
                 )
                 logger.info(
-                    "cda: istniejacy film potwierdzony jako sukces: %s",
+                    "cda: existing video confirmed as success: %s",
                     duplicate_url,
                 )
                 return UploadResult(
@@ -555,12 +555,12 @@ class CDAUploader(BaseUploader):
                     "textarea[placeholder*='Opis']",
                     "textarea[placeholder*='opis']",
                 ),
-                "opisu",
+                "description",
             ).fill(description)
             tags_input = optional_visible_locator(
                 page,
                 (
-                    "#tags_tag",  # pole tworzone przez widget jQuery tagsInput
+                    "#tags_tag",  # field created by the jQuery tagsInput widget
                     "input[name='tagi']:not([type='hidden'])",
                     "#tags:not([type='hidden'])",
                     "input[placeholder*='Tagi']",
@@ -580,9 +580,9 @@ class CDAUploader(BaseUploader):
                         }""",
                         ", ".join(tags),
                     )
-                    logger.info("cda: uzupelniono ukryte pole tagow z formularza HAR")
+                    logger.info("cda: populated the hidden tags field identified from HAR")
                 else:
-                    logger.warning("cda: nie znaleziono pola tagow; pomijam tagi")
+                    logger.warning("cda: tags field not found; skipping tags")
 
             options = {**CDA_FORM_DEFAULTS, **self.config.form_options}
             checkbox_answers = (
@@ -593,7 +593,7 @@ class CDAUploader(BaseUploader):
             for label, checked in checkbox_answers:
                 if not _set_checkbox_by_text(page, label, checked):
                     raise BrowserUploadError(
-                        f"CDA: nie znaleziono lub nie ustawiono pola {label!r}",
+                        f"CDA field {label!r} was not found or could not be set",
                         retriable=False,
                     )
 
@@ -607,14 +607,14 @@ class CDAUploader(BaseUploader):
             for question, answer_yes in radio_answers:
                 if not _set_radio_by_question(page, question, answer_yes):
                     raise BrowserUploadError(
-                        f"CDA: nie znaleziono odpowiedzi dla pytania {question!r}",
+                        f"CDA answer was not found for question {question!r}",
                         retriable=False,
                     )
 
             report_manual_captions("cda", srt_path)
             submit = _find_cda_submit_button(page)
             logger.info(
-                "cda: formularz metadanych wypelniony; klikam Dodaj do serwisu"
+                "cda: metadata form completed; clicking the publication button"
             )
             submit.click()
             url = _wait_for_cda_result_url(
@@ -642,5 +642,5 @@ class CDAUploader(BaseUploader):
         *,
         playlist_title: str | None = None,
     ) -> bool:
-        logger.info("cda: automatyczne kolekcje/playlisty nie sa wspierane")
+        logger.info("cda: automatic collections/playlists are not supported")
         return False

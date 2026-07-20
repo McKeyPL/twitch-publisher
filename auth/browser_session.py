@@ -1,4 +1,4 @@
-"""Sesja Playwright: storage_state -> cookies Firefoksa -> login reczny."""
+"""Playwright session: storage state, Firefox cookies, then manual login."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from urllib.parse import urlparse
 
 from config import BrowserConfig, BrowserPlatformConfig
 
-try:  # Import pozostaje opcjonalny dla testow jednostkowych.
+try:  # Keep the import optional for unit tests.
     import browser_cookie3
 except ImportError:  # pragma: no cover
     browser_cookie3 = None  # type: ignore[assignment]
@@ -28,7 +28,7 @@ AuthCheck = Callable[[Any], bool]
 
 
 class BrowserSessionError(RuntimeError):
-    """Nie udalo sie uzyskac aktywnej sesji platformy."""
+    """An active platform session could not be obtained."""
 
 
 @dataclass(slots=True)
@@ -44,28 +44,28 @@ class AuthenticatedBrowserSession:
             try:
                 if save_trace:
                     self.trace_path.parent.mkdir(parents=True, exist_ok=True)
-                    logger.info("Zapisuje trace Playwright po bledzie: %s", self.trace_path)
+                    logger.info("Saving Playwright trace after an error: %s", self.trace_path)
                     self.context.tracing.stop(path=str(self.trace_path))
-                    logger.info("Zapisano trace Playwright: %s", self.trace_path)
+                    logger.info("Saved Playwright trace: %s", self.trace_path)
                 else:
-                    # Pakowanie dlugiego trace po wielogigabajtowym uploadzie potrafi
-                    # blokowac zamkniecie przez wiele minut. Po sukcesie/cancel trace
-                    # jest zbedny; screenshoty i logi pozostaja na dysku.
+                    # Packaging a long trace after a multi-gigabyte upload can block
+                    # shutdown for minutes. A trace is unnecessary after success or
+                    # cancellation; screenshots and logs remain on disk.
                     self.context.tracing.stop()
-                    logger.info("Zakonczono trace Playwright bez zapisu archiwum")
+                    logger.info("Stopped Playwright tracing without saving an archive")
             except Exception:
-                logger.warning("Nie udalo sie zakonczyc trace Playwright", exc_info=True)
+                logger.warning("Could not stop Playwright tracing", exc_info=True)
         for resource in (self.context, self.browser):
             try:
                 resource.close()
-            except Exception:  # pragma: no cover - sprzatanie awaryjne
-                logger.debug("Blad zamykania zasobu Playwright", exc_info=True)
+            except Exception:  # pragma: no cover - emergency cleanup
+                logger.debug("Error while closing a Playwright resource", exc_info=True)
         try:
             self.playwright.stop()
         except Exception:  # pragma: no cover
-            logger.debug("Blad zatrzymywania Playwright", exc_info=True)
+            logger.debug("Error while stopping Playwright", exc_info=True)
         else:
-            logger.info("Zamknieto sesje Playwright")
+            logger.info("Closed Playwright session")
 
     def __enter__(self) -> "AuthenticatedBrowserSession":
         return self
@@ -78,7 +78,7 @@ class AuthenticatedBrowserSession:
 
 
 class BrowserSessionManager:
-    """Otwiera sesje wedlug kolejnosci: state, Firefox, login interaktywny."""
+    """Open a session using storage state, Firefox cookies, then interactive login."""
 
     def __init__(self, config: BrowserConfig) -> None:
         self.config = config
@@ -91,7 +91,7 @@ class BrowserSessionManager:
     ) -> AuthenticatedBrowserSession:
         if sync_playwright is None:
             raise BrowserSessionError(
-                "Brak Playwright. Zainstaluj requirements.txt i wykonaj "
+                "Playwright is unavailable. Install requirements.txt and run "
                 "playwright install firefox"
             )
 
@@ -122,15 +122,15 @@ class BrowserSessionManager:
             self._prepare_page(page, platform_name)
             page.goto(platform_config.upload_url, wait_until="domcontentloaded")
             print(
-                f"[{platform_name}] Zaloguj sie recznie w otwartym okienku, "
-                "potem nacisnij Enter"
+                f"[{platform_name}] Sign in manually in the open window, "
+                "then press Enter"
             )
             input()
             page.goto(platform_config.upload_url, wait_until="domcontentloaded")
             if not is_authenticated(page):
                 context.close()
                 raise BrowserSessionError(
-                    f"{platform_name}: po potwierdzeniu nadal brak aktywnej sesji"
+                    f"{platform_name}: no active session after manual confirmation"
                 )
             self._save_state(context, platform_config.storage_state_file)
             return AuthenticatedBrowserSession(
@@ -164,13 +164,13 @@ class BrowserSessionManager:
             self._prepare_page(page, platform_name)
             page.goto(platform_config.upload_url, wait_until="domcontentloaded")
             if is_authenticated(page):
-                logger.info("%s: uzyto zapisanego storage_state", platform_name)
+                logger.info("%s: using saved storage_state", platform_name)
                 return AuthenticatedBrowserSession(
                     page, context, browser, playwright, trace_path
                 )
-            logger.info("%s: zapisany storage_state wygasl", platform_name)
+            logger.info("%s: saved storage_state has expired", platform_name)
         except Exception as exc:
-            logger.warning("%s: nie mozna uzyc storage_state: %s", platform_name, exc)
+            logger.warning("%s: cannot use storage_state: %s", platform_name, exc)
         if context is not None:
             context.close()
         return None
@@ -184,7 +184,7 @@ class BrowserSessionManager:
         is_authenticated: AuthCheck,
     ) -> AuthenticatedBrowserSession | None:
         if browser_cookie3 is None:
-            logger.warning("%s: browser_cookie3 nie jest zainstalowane", platform_name)
+            logger.warning("%s: browser_cookie3 is not installed", platform_name)
             return None
         domain = (urlparse(platform_config.upload_url).hostname or "").removeprefix("www.")
         kwargs: dict[str, Any] = {"domain_name": domain}
@@ -196,12 +196,12 @@ class BrowserSessionManager:
             cookies = [_to_playwright_cookie(cookie) for cookie in jar]
         except (PermissionError, sqlite3.OperationalError, OSError) as exc:
             logger.warning(
-                "%s: Firefox blokuje baze cookies (%s). Zamknij Firefox; "
-                "przechodze do logowania recznego.", platform_name, exc
+                "%s: Firefox cookie database is locked (%s). Close Firefox; "
+                "falling back to manual login.", platform_name, exc
             )
             return None
         except Exception as exc:
-            logger.warning("%s: odczyt cookies nie powiodl sie: %s", platform_name, exc)
+            logger.warning("%s: could not read cookies: %s", platform_name, exc)
             return None
         if not cookies:
             return None
@@ -217,12 +217,12 @@ class BrowserSessionManager:
                 context.close()
                 return None
             self._save_state(context, platform_config.storage_state_file)
-            logger.info("%s: zapisano sesje uzyskana z Firefoksa", platform_name)
+            logger.info("%s: saved session imported from Firefox", platform_name)
             return AuthenticatedBrowserSession(
                 page, context, browser, playwright, trace_path
             )
         except Exception as exc:
-            logger.warning("%s: nie mozna wstrzyknac cookies: %s", platform_name, exc)
+            logger.warning("%s: cannot inject cookies: %s", platform_name, exc)
             context.close()
             return None
 
@@ -241,7 +241,7 @@ class BrowserSessionManager:
         trace_path = debug_directory / f"{platform_name}_{timestamp}_trace.zip"
         context.tracing.start(screenshots=True, snapshots=True, sources=True)
         logger.info(
-            "%s: wlaczono trace Playwright; archiwum zostanie zapisane tylko po bledzie -> %s",
+            "%s: Playwright tracing enabled; the archive is saved only on error -> %s",
             platform_name,
             trace_path,
         )

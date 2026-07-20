@@ -12,8 +12,8 @@ Set-Location -LiteralPath $PSScriptRoot
 
 $venvActivate = Join-Path $PSScriptRoot ".venv\Scripts\Activate.ps1"
 if (-not (Test-Path -LiteralPath $venvActivate -PathType Leaf)) {
-    Write-Host "[BLAD] Brak srodowiska .venv." -ForegroundColor Red
-    Write-Host "Utworz je poleceniem: python -m venv .venv" -ForegroundColor Yellow
+    Write-Host "[ERROR] The .venv environment does not exist." -ForegroundColor Red
+    Write-Host "Create it with: python -m venv .venv" -ForegroundColor Yellow
     exit 2
 }
 
@@ -21,12 +21,12 @@ try {
     & $venvActivate
 }
 catch {
-    Write-Host "[BLAD] Nie udalo sie aktywowac .venv." -ForegroundColor Red
+    Write-Host "[ERROR] Could not activate .venv." -ForegroundColor Red
     exit 3
 }
 
 if (-not (Test-Path -LiteralPath (Join-Path $PSScriptRoot ".env") -PathType Leaf)) {
-    Write-Host "[UWAGA] Brak .env; konfiguracja moze wymagac zmiennych srodowiskowych." -ForegroundColor Yellow
+    Write-Host "[WARNING] .env is missing; configuration may require environment variables." -ForegroundColor Yellow
 }
 
 $logsDirectory = Join-Path $PSScriptRoot "logs"
@@ -42,7 +42,7 @@ function Write-LauncherLog {
 }
 
 while ($true) {
-    Write-LauncherLog "Start main.py (restart nr $restartCount)."
+    Write-LauncherLog "Starting main.py (restart number $restartCount)."
     $pythonArguments = @("main.py", "--config", $Config)
     if ($Once) {
         $pythonArguments += "--once"
@@ -55,17 +55,17 @@ while ($true) {
     $pythonExitCode = $LASTEXITCODE
 
     if ($pythonExitCode -eq 0) {
-        Write-LauncherLog "main.py zakonczyl dzialanie poprawnie."
+        Write-LauncherLog "main.py exited successfully."
         exit 0
     }
 
     if ($Once) {
-        Write-LauncherLog "main.py zakonczyl sie kodem $pythonExitCode; tryb Once bez restartu."
+        Write-LauncherLog "main.py exited with code $pythonExitCode; Once mode will not restart."
         exit $pythonExitCode
     }
 
     $restartCount++
-    Write-LauncherLog "Awaria main.py (kod $pythonExitCode). Restart nr $restartCount za $RestartDelaySeconds s."
-    Write-Host "[UWAGA] Restart procesu..." -ForegroundColor Yellow
+    Write-LauncherLog "main.py failed with code $pythonExitCode. Restart $restartCount in $RestartDelaySeconds s."
+    Write-Host "[WARNING] Restarting process..." -ForegroundColor Yellow
     Start-Sleep -Seconds $RestartDelaySeconds
 }

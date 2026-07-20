@@ -1,4 +1,4 @@
-"""Gotowosc nagrania oraz odczyt rzeczywistego czasu MKV przez ffprobe."""
+"""Recording readiness checks and MKV duration probing with ffprobe."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from meta_parser import MetadataError, StreamMetadata, meta_path_for_video, pars
 
 
 class DurationProbeError(RuntimeError):
-    """ffprobe nie mogl ustalic czasu trwania pliku."""
+    """ffprobe could not determine the file duration."""
 
 
 class ReadinessStatus(str, Enum):
@@ -44,11 +44,11 @@ class _SizeSample:
 
 
 class FileSizeStabilityTracker:
-    """Przechowuje pomiary miedzy cyklami watchera, bez wywolywania sleep()."""
+    """Keep samples between watcher cycles without calling sleep()."""
 
     def __init__(self, required_interval_seconds: float = 60.0) -> None:
         if required_interval_seconds <= 0:
-            raise ValueError("required_interval_seconds musi byc wieksze od zera")
+            raise ValueError("required_interval_seconds must be greater than zero")
         self.required_interval_seconds = required_interval_seconds
         self._samples: dict[Path, _SizeSample] = {}
 
@@ -83,18 +83,18 @@ def check_recording_readiness(
     expected_channel: str | None = None,
     now: float | None = None,
 ) -> ReadinessResult:
-    """Sprawdza kolejno: MKV, meta, Ended i stabilnosc rozmiaru MKV."""
+    """Check the MKV, metadata, Ended field, and stable MKV size in order."""
     video = Path(video_path)
     if not video.is_file():
         tracker.forget(video)
-        return ReadinessResult(ReadinessStatus.FILE_MISSING, f"Brak pliku MKV: {video}")
+        return ReadinessResult(ReadinessStatus.FILE_MISSING, f"MKV file is missing: {video}")
 
     meta_path = meta_path_for_video(video)
     if not meta_path.is_file():
         tracker.forget(video)
         return ReadinessResult(
             ReadinessStatus.META_MISSING,
-            "Brak _meta.txt; stream prawdopodobnie nadal trwa",
+            "_meta.txt is missing; the stream is probably still running",
         )
 
     try:
@@ -107,15 +107,15 @@ def check_recording_readiness(
         tracker.forget(video)
         return ReadinessResult(
             ReadinessStatus.ENDED_MISSING,
-            "Plik metadanych nie zawiera wypelnionego pola Ended",
+            "The metadata file does not contain a populated Ended field",
             metadata,
         )
 
     status = tracker.check(video, now=now)
     reasons = {
-        ReadinessStatus.SIZE_CHECK_PENDING: "Oczekiwanie na drugi pomiar rozmiaru MKV",
-        ReadinessStatus.SIZE_CHANGED: "Rozmiar MKV zmienil sie; mux/flush moze nadal trwac",
-        ReadinessStatus.READY: "Metadane sa kompletne, a rozmiar MKV jest stabilny",
+        ReadinessStatus.SIZE_CHECK_PENDING: "Waiting for the second MKV size sample",
+        ReadinessStatus.SIZE_CHANGED: "MKV size changed; muxing or flushing may still be in progress",
+        ReadinessStatus.READY: "Metadata is complete and the MKV size is stable",
     }
     return ReadinessResult(status, reasons[status], metadata)
 
@@ -126,7 +126,7 @@ def probe_duration_seconds(
     ffprobe_path: str = "ffprobe",
     timeout_seconds: float = 120.0,
 ) -> float:
-    """Odczytuje czas materialu z kontenera, bez parsowania tekstu zależnego od locale."""
+    """Read duration from the container without parsing locale-dependent text."""
     command = [
         ffprobe_path,
         "-v",
@@ -148,26 +148,26 @@ def probe_duration_seconds(
             check=False,
         )
     except FileNotFoundError as exc:
-        raise DurationProbeError(f"Nie znaleziono ffprobe: {ffprobe_path}") from exc
+        raise DurationProbeError(f"ffprobe was not found: {ffprobe_path}") from exc
     except subprocess.TimeoutExpired as exc:
-        raise DurationProbeError(f"ffprobe przekroczyl limit {timeout_seconds} s") from exc
+        raise DurationProbeError(f"ffprobe exceeded the {timeout_seconds} s timeout") from exc
 
     if completed.returncode != 0:
-        details = completed.stderr.strip() or f"kod wyjscia {completed.returncode}"
-        raise DurationProbeError(f"ffprobe nie odczytal czasu: {details}")
+        details = completed.stderr.strip() or f"exit code {completed.returncode}"
+        raise DurationProbeError(f"ffprobe could not read the duration: {details}")
 
     try:
         duration = float(json.loads(completed.stdout)["format"]["duration"])
     except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
-        raise DurationProbeError("ffprobe zwrocil niepoprawny lub pusty czas trwania") from exc
+        raise DurationProbeError("ffprobe returned an invalid or empty duration") from exc
 
     if duration < 0:
-        raise DurationProbeError("ffprobe zwrocil ujemny czas trwania")
+        raise DurationProbeError("ffprobe returned a negative duration")
     return duration
 
 
 def exceeds_duration_limit(duration_seconds: float, max_hours: float = 12.0) -> bool:
-    """Granica jest ostra: dokladnie 12 h nadal kwalifikuje sie do YouTube."""
+    """The boundary is strict: exactly 12 hours still qualifies for YouTube."""
     if duration_seconds < 0 or max_hours <= 0:
-        raise ValueError("Niepoprawny czas trwania lub limit")
+        raise ValueError("Invalid duration or limit")
     return duration_seconds > max_hours * 60 * 60

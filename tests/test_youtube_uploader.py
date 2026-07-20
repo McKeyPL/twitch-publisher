@@ -24,7 +24,7 @@ def youtube_config(tmp_path: Path) -> YouTubeConfig:
         title_limit=100,
         category_id="20",
         captions_language="pl",
-        captions_name="Czat Twitch",
+        captions_name="Twitch Chat",
         daily_upload_limit=100,
         daily_quota_units=10_000,
         upload_quota_units=1,
@@ -96,8 +96,8 @@ def test_successful_resumable_upload(
         with patch("uploaders.youtube.MediaFileUpload") as media_upload:
             result = uploader.upload(
                 video,
-                "Tytul",
-                "Opis",
+                "Title",
+                "Description",
                 ["mrozopl", "Twitch"],
             )
 
@@ -132,10 +132,10 @@ def test_quota_is_rejected_before_service_or_upload_is_created(
             patch("uploaders.youtube.build") as mocked_build,
             patch("uploaders.youtube.MediaFileUpload") as media_upload,
         ):
-            result = uploader.upload(video, "Tytul", "Opis", [])
+            result = uploader.upload(video, "Title", "Description", [])
 
     assert result.success is False
-    assert "reset o polnocy Pacific Time" in (result.error_message or "")
+    assert "reset at Pacific Time midnight" in (result.error_message or "")
     mocked_build.assert_not_called()
     media_upload.assert_not_called()
 
@@ -166,7 +166,7 @@ def test_retries_next_chunk_after_http_500(
             patch("uploaders.youtube.MediaFileUpload"),
             patch("uploaders.base.time.sleep") as sleep,
         ):
-            result = uploader.upload(video, "Tytul", "Opis", [])
+            result = uploader.upload(video, "Title", "Description", [])
 
     assert result.success is True
     assert result.platform_video_id == "after-retry"
@@ -181,7 +181,7 @@ def test_uploads_captions_after_video(
 ) -> None:
     video = make_video(tmp_path)
     srt = tmp_path / "stream_chat.srt"
-    srt.write_text("1\n00:00:01,000 --> 00:00:02,000\nCzat\n", encoding="utf-8")
+    srt.write_text("1\n00:00:01,000 --> 00:00:02,000\nChat\n", encoding="utf-8")
     service = successful_video_service("with-captions")
     captions_request = MagicMock()
     captions_request.execute.return_value = {"id": "caption-id"}
@@ -191,7 +191,7 @@ def test_uploads_captions_after_video(
         uploader = YouTubeUploader(youtube_config, retry_config, store)
         uploader._service = service
         with patch("uploaders.youtube.MediaFileUpload"):
-            result = uploader.upload(video, "Tytul", "Opis", [], srt)
+            result = uploader.upload(video, "Title", "Description", [], srt)
 
         period, _ = _pacific_quota_window()
         assert store.get_quota_usage("youtube_videos_insert", period) == 1

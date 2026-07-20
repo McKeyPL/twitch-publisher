@@ -1,4 +1,4 @@
-"""Uploader YouTube Data API v3 z OAuth2, resumable upload i napisami."""
+"""YouTube Data API v3 uploader with OAuth2, resumable upload, and captions."""
 
 from __future__ import annotations
 
@@ -37,7 +37,7 @@ PACIFIC_TIME = ZoneInfo("America/Los_Angeles")
 
 
 def _pacific_quota_window(now: datetime | None = None) -> tuple[str, datetime]:
-    """Zwraca klucz dnia Pacific Time i moment kolejnej polnocy PT."""
+    """Return the Pacific Time day key and the next PT midnight."""
     current = now or datetime.now(timezone.utc)
     if current.tzinfo is None:
         current = current.replace(tzinfo=timezone.utc)
@@ -65,12 +65,12 @@ def _friendly_youtube_error(error: Exception) -> str:
 
     reason = _youtube_error_reason(error)
     special_messages = {
-        "quotaExceeded": "YouTube API: przekroczono dostepna quote (quotaExceeded)",
-        "dailyLimitExceeded": "YouTube API: przekroczono dzienny limit quoty",
-        "videoTooLong": "YouTube odrzucil material jako zbyt dlugi (videoTooLong)",
+        "quotaExceeded": "YouTube API quota has been exceeded (quotaExceeded)",
+        "dailyLimitExceeded": "YouTube API daily quota has been exceeded",
+        "videoTooLong": "YouTube rejected the video as too long (videoTooLong)",
         "uploadLimitExceeded": (
-            "YouTube: przekroczono dzienny limit liczby uploadow "
-            "(uploadLimitExceeded), niezalezny od quoty API"
+            "YouTube daily upload-count limit has been exceeded "
+            "(uploadLimitExceeded), independently of API quota"
         ),
     }
     if reason in special_messages:
@@ -111,24 +111,24 @@ class YouTubeUploader(BaseUploader):
             try:
                 credentials = Credentials.from_authorized_user_file(token_path, SCOPES)
             except (OSError, ValueError) as exc:
-                logger.warning("Nie mozna uzyc tokenu OAuth %s: %s", token_path, exc)
+                logger.warning("Cannot use OAuth token %s: %s", token_path, exc)
 
         if credentials and credentials.expired and credentials.refresh_token:
             try:
                 credentials.refresh(Request())
             except RefreshError as exc:
-                logger.warning("Automatyczne odswiezenie tokenu nie powiodlo sie: %s", exc)
+                logger.warning("Automatic token refresh failed: %s", exc)
                 credentials = None
 
         has_scopes = bool(credentials and credentials.has_scopes(SCOPES))
         if not credentials or not credentials.valid or not has_scopes:
             if self.config.client_secrets_file is None:
-                raise RuntimeError("Brak client_secrets_file dla OAuth YouTube")
+                raise RuntimeError("client_secrets_file is missing for YouTube OAuth")
             flow = InstalledAppFlow.from_client_secrets_file(
                 str(self.config.client_secrets_file),
                 SCOPES,
             )
-            logger.info("Otwieranie przegladarki do autoryzacji YouTube OAuth2")
+            logger.info("Opening a browser for YouTube OAuth2 authorization")
             credentials = flow.run_local_server(port=0, open_browser=True)
 
         token_path.parent.mkdir(parents=True, exist_ok=True)
@@ -150,16 +150,16 @@ class YouTubeUploader(BaseUploader):
             return None, None
         srt = Path(srt_path)
         if not srt.is_file():
-            raise FileNotFoundError(f"Nie znaleziono pliku SRT: {srt}")
+            raise FileNotFoundError(f"SRT file was not found: {srt}")
         size = srt.stat().st_size
         if size == 0:
-            logger.info("Pusty SRT nie bedzie wysylany do YouTube: %s", srt)
+            logger.info("Empty SRT will not be uploaded to YouTube: %s", srt)
             return None, None
         maximum = int(self.config.srt_max_size_mb * 1024 * 1024)
         if size > maximum:
             warning = (
-                f"SRT {srt} ma {size} bajtow i przekracza limit "
-                f"{self.config.srt_max_size_mb:g} MB; napisy pominieto"
+                f"SRT {srt} is {size} bytes and exceeds the "
+                f"{self.config.srt_max_size_mb:g} MB limit; captions were skipped"
             )
             logger.warning(warning)
             return None, warning
@@ -185,17 +185,17 @@ class YouTubeUploader(BaseUploader):
                 )
             )
 
-        # Preflight wszystkich bucketow zapobiega czesciowej rezerwacji w zwyklym,
-        # jednoprocowym uzyciu. Atomowy warunek w StateStore chroni dodatkowo race.
+        # Preflighting all buckets prevents partial reservation in normal,
+        # single-process use. StateStore's atomic condition also prevents races.
         for bucket, cost, limit, operation in reservations:
             current = self.state_store.get_quota_usage(bucket, period)
             if current + cost > limit:
                 message = (
-                    f"Lokalny limit quoty YouTube dla {operation} zostal przekroczony: "
-                    f"wykorzystano {current}/{limit}, operacja wymaga {cost}. "
-                    f"Kolejny reset o polnocy Pacific Time: {next_reset.isoformat()} "
+                    f"Local YouTube quota limit for {operation} would be exceeded: "
+                    f"used {current}/{limit}, operation requires {cost}. "
+                    f"Next reset at Pacific Time midnight: {next_reset.isoformat()} "
                     f"({next_reset.astimezone(timezone.utc).isoformat()} UTC). "
-                    "Sprawdz rzeczywisty granularny limit w Google Cloud Console."
+                    "Check the authoritative granular limit in Google Cloud Console."
                 )
                 logger.error(message)
                 return False, message
@@ -204,15 +204,15 @@ class YouTubeUploader(BaseUploader):
             reserved, usage = self.state_store.try_reserve_quota(
                 bucket, period, cost, limit
             )
-            if not reserved:  # mozliwy tylko przy konkurencyjnym drugim procesie
+            if not reserved:  # possible only with a concurrent second process
                 message = (
-                    f"Nie udalo sie zarezerwowac quoty {operation} z powodu "
-                    "rownoleglego wykorzystania limitu. Sprobuj po resecie o polnocy PT."
+                    f"Could not reserve quota for {operation} because another process "
+                    "used the limit concurrently. Retry after the PT midnight reset."
                 )
                 logger.error(message)
                 return False, message
             logger.info(
-                "YouTube: zarezerwowano %d dla %s (%d/%d, okres PT %s)",
+                "YouTube: reserved %d for %s (%d/%d, PT period %s)",
                 cost,
                 operation,
                 usage,
@@ -231,9 +231,9 @@ class YouTubeUploader(BaseUploader):
     ) -> UploadResult:
         video = Path(video_path)
         if not video.is_file():
-            return UploadResult(False, error_message=f"Nie znaleziono pliku wideo: {video}")
+            return UploadResult(False, error_message=f"Video file was not found: {video}")
         if not title.strip():
-            return UploadResult(False, error_message="Tytul YouTube nie moze byc pusty")
+            return UploadResult(False, error_message="YouTube title cannot be empty")
 
         try:
             usable_srt, captions_warning = self._prepare_srt(srt_path)
@@ -270,17 +270,17 @@ class YouTubeUploader(BaseUploader):
                 self._raise_if_cancelled()
                 _, response = self._with_retry(
                     request.next_chunk,
-                    operation_name=f"wysylanie fragmentu {video.name}",
+                    operation_name=f"uploading chunk of {video.name}",
                     should_retry=_is_retriable_error,
                 )
         except Exception as exc:
             message = _friendly_youtube_error(exc)
-            logger.exception("Upload YouTube nie powiodl sie: %s", message)
+            logger.exception("YouTube upload failed: %s", message)
             return UploadResult(False, error_message=message)
 
         video_id = response.get("id") if response else None
         if not video_id:
-            return UploadResult(False, error_message="YouTube nie zwrocil video ID po uploadzie")
+            return UploadResult(False, error_message="YouTube returned no video ID after upload")
         video_url = f"https://youtube.com/watch?v={video_id}"
 
         captions_uploaded = False
@@ -306,15 +306,15 @@ class YouTubeUploader(BaseUploader):
                 )
                 self._with_retry(
                     captions_request.execute,
-                    operation_name=f"dodawanie napisow do {video_id}",
+                    operation_name=f"adding captions to {video_id}",
                     should_retry=_is_retriable_error,
                 )
                 captions_uploaded = True
             except Exception as exc:
-                captions_error = f"Wideo wyslane, ale napisy nie zostaly dodane: {_friendly_youtube_error(exc)}"
+                captions_error = f"Video uploaded, but captions were not added: {_friendly_youtube_error(exc)}"
                 logger.exception(captions_error)
 
-        logger.info("Upload YouTube zakonczony: %s", video_url)
+        logger.info("YouTube upload completed: %s", video_url)
         return UploadResult(
             success=True,
             platform_video_id=video_id,
@@ -329,24 +329,24 @@ class YouTubeUploader(BaseUploader):
             body={
                 "snippet": {
                     "title": playlist_title,
-                    "description": f"Automatyczne archiwum streamow: {playlist_title}",
+                    "description": f"Automatic stream archive: {playlist_title}",
                 },
                 "status": {"privacyStatus": self.config.privacy_status},
             },
         )
         response = self._with_retry(
             request.execute,
-            operation_name=f"tworzenie playlisty {playlist_title}",
+            operation_name=f"creating playlist {playlist_title}",
             should_retry=_is_retriable_error,
         )
         playlist_id = response.get("id")
         if not playlist_id:
-            raise RuntimeError("YouTube nie zwrocil ID nowej playlisty")
+            raise RuntimeError("YouTube returned no ID for the new playlist")
 
         env_name = "YT_PLAYLIST_" + re.sub(r"[^A-Z0-9]+", "_", playlist_title.upper()).strip("_")
         logger.warning(
-            "Utworzono playliste %s dla %s. Zapisz %s=%s w .env; "
-            "bez tego kolejny proces moze utworzyc nastepna playliste.",
+            "Created playlist %s for %s. Save %s=%s in .env; otherwise the "
+            "next process may create another playlist.",
             playlist_id,
             playlist_title,
             env_name,
@@ -362,7 +362,7 @@ class YouTubeUploader(BaseUploader):
         playlist_title: str | None = None,
     ) -> bool:
         if not platform_video_id.strip():
-            logger.error("Nie mozna dodac do playlisty bez video ID")
+            logger.error("Cannot add to a playlist without a video ID")
             return False
 
         playlist_id = playlist_identifier.strip()
@@ -375,17 +375,17 @@ class YouTubeUploader(BaseUploader):
                 )
                 lookup_response = self._with_retry(
                     lookup.execute,
-                    operation_name=f"sprawdzanie playlisty {playlist_id}",
+                    operation_name=f"checking playlist {playlist_id}",
                     should_retry=_is_retriable_error,
                 )
                 if not lookup_response.get("items"):
-                    logger.warning("Playlista %s nie istnieje", playlist_id)
+                    logger.warning("Playlist %s does not exist", playlist_id)
                     playlist_id = ""
 
             if not playlist_id:
                 if not playlist_title or not playlist_title.strip():
                     logger.error(
-                        "Brak playlist_id oraz playlist_title; nie mozna utworzyc playlisty"
+                        "playlist_id and playlist_title are missing; cannot create a playlist"
                     )
                     return False
                 playlist_id = self._create_playlist(playlist_title.strip())
@@ -404,11 +404,11 @@ class YouTubeUploader(BaseUploader):
             )
             self._with_retry(
                 insert.execute,
-                operation_name=f"dodawanie {platform_video_id} do playlisty {playlist_id}",
+                operation_name=f"adding {platform_video_id} to playlist {playlist_id}",
                 should_retry=_is_retriable_error,
             )
-            logger.info("Dodano wideo %s do playlisty %s", platform_video_id, playlist_id)
+            logger.info("Added video %s to playlist %s", platform_video_id, playlist_id)
             return True
         except Exception as exc:
-            logger.exception("Nie dodano wideo do playlisty: %s", _friendly_youtube_error(exc))
+            logger.exception("Could not add video to playlist: %s", _friendly_youtube_error(exc))
             return False

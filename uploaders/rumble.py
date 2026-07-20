@@ -1,4 +1,4 @@
-"""Uploader Rumble oparty o formularz upload.php."""
+"""Rumble uploader based on the upload.php form."""
 
 from __future__ import annotations
 
@@ -84,24 +84,24 @@ def _rumble_result_url(page: object) -> str:
         if value:
             return urljoin("https://rumble.com", value)
     raise BrowserUploadError(
-        "Rumble pokazal sukces, ale nie zwrocil URL nagrania; sprawdz panel recznie",
+        "Rumble reported success but returned no recording URL; check the dashboard manually",
         retriable=False,
         manual_review_required=True,
     )
 
 
 def _accept_rumble_confirmation(page: object, checkbox_id: str) -> None:
-    """Zaznacza ukryty checkbox i sprawdza pole walidowane przez Rumble.
+    """Select a hidden checkbox and verify the field validated by Rumble.
 
-    Natywne inputy ``#crights`` i ``#cterms`` sa ukryte przez CSS. Klikniecie
-    tekstu wewnatrz etykiety ``cterms`` moze trafic w link do regulaminu zamiast
-    checkboxa. Wymuszone ``set_checked`` emituje zdarzenie ``change`` obslugiwane
-    przez strone i aktualizuje ``#rights``/``#terms``.
+    Native ``#crights`` and ``#cterms`` inputs are hidden by CSS. Clicking text
+    inside the ``cterms`` label may activate the terms link instead of the
+    checkbox. Updating the input directly emits the page's ``change`` event and
+    updates ``#rights``/``#terms``.
     """
     checkbox = unique_locator(
         page,
         (f"#{checkbox_id}",),
-        f"potwierdzenia {checkbox_id}",
+        f"{checkbox_id} confirmation",
     )
     if checkbox.is_checked():
         pass
@@ -115,24 +115,24 @@ def _accept_rumble_confirmation(page: object, checkbox_id: str) -> None:
         )
     if not checkbox.is_checked():
         raise BrowserUploadError(
-            f"Rumble: kontrolka zgody {checkbox_id} nie zostala zaznaczona",
+            f"Rumble confirmation control {checkbox_id} was not selected",
             retriable=False,
         )
     hidden_id = checkbox_id.removeprefix("c")
     hidden = unique_locator(
         page,
         (f"#{hidden_id}",),
-        f"ukrytego potwierdzenia {hidden_id}",
+        f"hidden {hidden_id} confirmation",
     )
     if hidden.input_value() != "1":
         raise BrowserUploadError(
-            f"Rumble: zgoda {checkbox_id} nie zaktualizowala pola {hidden_id}",
+            f"Rumble confirmation {checkbox_id} did not update field {hidden_id}",
             retriable=False,
         )
 
 
 def _read_rumble_transfer_status(page: object) -> dict[str, object]:
-    """Czyta serwerowy token uploadu i widoczny postep z formularza Rumble."""
+    """Read the server upload token and visible Rumble form progress."""
     status = getattr(page, "evaluate")(
         """() => {
             const videoToken = (document.getElementById('video[]')?.value || '').trim();
@@ -162,7 +162,7 @@ def _read_rumble_transfer_status(page: object) -> dict[str, object]:
     )
     if not isinstance(status, dict):
         raise BrowserUploadError(
-            "Rumble: nie udalo sie odczytac stanu transferu",
+            "Rumble transfer state could not be read",
             retriable=True,
         )
     return status
@@ -176,7 +176,7 @@ def _wait_for_rumble_transfer(
     timeout_ms: int = UPLOAD_TIMEOUT_MS,
     heartbeat_interval_ms: int = HEARTBEAT_INTERVAL_MS,
 ) -> None:
-    """Czeka na token ustawiany przez Rumble po wyslaniu i scaleniu pliku."""
+    """Wait for the token set after Rumble uploads and merges the file."""
     started = time.monotonic()
     deadline = started + timeout_ms / 1000
     next_heartbeat = started
@@ -185,31 +185,31 @@ def _wait_for_rumble_transfer(
             cancel_check()
         status = _read_rumble_transfer_status(page)
         if status.get("failed") or status.get("error"):
-            detail = status.get("error") or "Rumble oznaczyl transfer jako ERROR"
+            detail = status.get("error") or "Rumble marked the transfer as ERROR"
             raise BrowserUploadError(
-                f"Rumble: transfer pliku nie powiodl sie: {detail}",
+                f"Rumble file transfer failed: {detail}",
                 retriable=True,
             )
         if status.get("complete"):
             logger.info(
-                "rumble: transfer pliku i scalenie chunkow zakonczone (100%%)"
+                "rumble: file transfer and chunk merge completed (100%%)"
             )
             return
 
         now = time.monotonic()
         if now >= deadline:
             raise BrowserUploadError(
-                f"Rumble: przekroczono limit oczekiwania na transfer "
+                f"Rumble timed out while waiting for transfer completion "
                 f"({timeout_ms / 1000:.0f} s)",
                 retriable=True,
             )
         if now >= next_heartbeat:
             details = "; ".join(str(item) for item in status.get("details", []))
             logger.info(
-                "rumble: transfer trwa (%.0f s), postep=%s, panel=%s",
+                "rumble: transfer in progress (%.0f s), progress=%s, panel=%s",
                 now - started,
                 status.get("percent") if status.get("percent") is not None else "?",
-                details or "brak danych",
+                details or "no data",
             )
             if heartbeat_probe is not None:
                 heartbeat_probe()
@@ -281,15 +281,15 @@ class RumbleUploader(BaseUploader):
                     f"{code}={label}" for code, label in LICENSE_LABELS.items()
                 )
                 raise BrowserUploadError(
-                    "Ustaw RUMBLE_LICENSE_OPTION w .env przed uploadem Rumble. "
-                    f"Dozwolone wartosci: {allowed}",
+                    "Set RUMBLE_LICENSE_OPTION in .env before uploading to Rumble. "
+                    f"Allowed values: {allowed}",
                     retriable=False,
                 )
             if self.config.max_file_size_gb is not None:
                 limit_bytes = self.config.max_file_size_gb * 1_000_000_000
                 if video_path.stat().st_size > limit_bytes:
                     raise BrowserUploadError(
-                        f"Plik przekracza limit Rumble {self.config.max_file_size_gb:g} GB: "
+                        f"File exceeds the Rumble {self.config.max_file_size_gb:g} GB limit: "
                         f"{video_path}",
                         retriable=False,
                     )
@@ -299,7 +299,7 @@ class RumbleUploader(BaseUploader):
                 should_retry=should_retry_browser_error,
             )
         except Exception as exc:
-            logger.error("rumble: upload %s nie powiodl sie: %s", video_path, exc)
+            logger.error("rumble: upload %s failed: %s", video_path, exc)
             return UploadResult(
                 success=False,
                 error_message=str(exc),
@@ -321,18 +321,18 @@ class RumbleUploader(BaseUploader):
             self._raise_if_cancelled()
             self._debug_snapshot(page, "session_ready", force=True)
             logger.info(
-                "rumble: sesja gotowa (%s); wskazuje plik %.2f GiB: %s",
+                "rumble: session ready (%s); selecting %.2f GiB file: %s",
                 page.url,
                 video_path.stat().st_size / (1024 ** 3),
                 video_path,
             )
-            unique_visible_locator(page, ("#Filedata",), "pliku wideo").set_input_files(
+            unique_visible_locator(page, ("#Filedata",), "video file").set_input_files(
                 str(video_path), timeout=60_000
             )
             self._raise_if_cancelled()
             self._debug_snapshot(page, "file_selected", force=True)
-            unique_visible_locator(page, ("#title",), "tytulu").fill(title)
-            unique_visible_locator(page, ("#description",), "opisu").fill(description)
+            unique_visible_locator(page, ("#title",), "title").fill(title)
+            unique_visible_locator(page, ("#description",), "description").fill(description)
             tags_input = optional_visible_locator(page, ("#tags",))
             if tags_input is not None:
                 tags_input.fill(", ".join(tags))
@@ -345,30 +345,30 @@ class RumbleUploader(BaseUploader):
                 page, "#category_primary", primary_category
             ):
                 raise BrowserUploadError(
-                    f"Rumble: nie znaleziono kategorii glownej {primary_category!r}",
+                    f"Rumble primary category {primary_category!r} was not found",
                     retriable=False,
                 )
-            logger.info("rumble: ustawiono kategorie glowna %s", primary_category)
+            logger.info("rumble: set primary category to %s", primary_category)
             if len(tags) >= 4:
                 game = tags[-1]
                 if _set_category_by_label(page, "#category_secondary", game):
-                    logger.info("rumble: ustawiono kategorie gry %s", game)
+                    logger.info("rumble: set game category to %s", game)
                 else:
                     logger.info(
-                        "rumble: brak dokladnej kategorii gry %s; pozostaje Gaming",
+                        "rumble: no exact game category for %s; keeping Gaming",
                         game,
                     )
 
             report_manual_captions("rumble", srt_path)
-            unique_visible_locator(page, ("#submitForm",), "przycisku Upload").click()
+            unique_visible_locator(page, ("#submitForm",), "Upload button").click()
 
-            # Rumble pokazuje drugi krok dotyczacy praw/licencji. Pola opisowe sa
-            # opcjonalne, lecz potwierdzenie praw i regulaminu jest wymagane.
+            # Rumble presents a second rights/license step. Descriptive fields are
+            # optional, but ownership and terms confirmations are required.
             final_submit = page.locator("#submitForm2")
             wait_for_visible_with_heartbeat(
                 final_submit,
                 platform="rumble",
-                field_name="drugi krok formularza",
+                field_name="second form step",
                 failure_probe=lambda: visible_error_text(
                     page,
                     (
@@ -399,17 +399,17 @@ class RumbleUploader(BaseUploader):
             license_control = unique_visible_locator(
                 page,
                 (f"[crcval='{license_option}']",),
-                "opcji licencji Rumble",
+                "Rumble license option",
             )
             license_control.click()
             logger.info(
-                "rumble: ustawiono licencje %s=%s",
+                "rumble: set license %s=%s",
                 license_option,
                 LICENSE_LABELS[license_option],
             )
             for checkbox_id in ("crights", "cterms"):
                 _accept_rumble_confirmation(page, checkbox_id)
-            logger.info("rumble: zaakceptowano prawa do materialu i regulamin")
+            logger.info("rumble: confirmed content ownership and accepted terms")
             self._debug_snapshot(
                 page, "license_and_confirmations_ready", force=True
             )
@@ -420,7 +420,7 @@ class RumbleUploader(BaseUploader):
                 wait_for_visible_with_heartbeat(
                     success_form,
                     platform="rumble",
-                    field_name="potwierdzenie publikacji",
+                    field_name="publication confirmation",
                     failure_probe=lambda: visible_error_text(
                         page,
                         (
@@ -439,15 +439,15 @@ class RumbleUploader(BaseUploader):
                 )
             except BrowserUploadError as exc:
                 raise BrowserUploadError(
-                    f"Nie potwierdzono wyniku publikacji Rumble: {exc}. "
-                    "Sprawdz panel recznie; upload nie bedzie ponawiany.",
+                    f"Rumble publication result was not confirmed: {exc}. "
+                    "Check the dashboard manually; the upload will not be retried.",
                     retriable=False,
                     manual_review_required=True,
                 ) from exc
             url = _rumble_result_url(page)
             if not re.search(r"rumble\.com/(v|embed|account/content)", url):
                 raise BrowserUploadError(
-                    f"Rumble zwrocil nieoczekiwany URL: {url}; sprawdz panel recznie",
+                    f"Rumble returned an unexpected URL: {url}; check the dashboard manually",
                     retriable=False,
                     manual_review_required=True,
                 )
@@ -465,5 +465,5 @@ class RumbleUploader(BaseUploader):
         *,
         playlist_title: str | None = None,
     ) -> bool:
-        logger.info("rumble: automatyczne playlisty/kolekcje nie sa wspierane")
+        logger.info("rumble: automatic playlists/collections are not supported")
         return False

@@ -46,14 +46,14 @@ def test_visible_wait_logs_heartbeat_and_then_returns(caplog, monkeypatch) -> No
         browser_form.wait_for_visible_with_heartbeat(
             locator,
             platform="cda",
-            field_name="formularz metadanych",
+            field_name="metadata form",
             timeout_ms=10_000,
             heartbeat_interval_ms=1,
         )
 
     assert locator.calls == 2
-    assert "nadal oczekuje na formularz metadanych" in caplog.text
-    assert "pole formularz metadanych jest gotowe" in caplog.text
+    assert "still waiting for metadata form" in caplog.text
+    assert "metadata form field is ready" in caplog.text
 
 
 def test_video_url_wait_logs_heartbeat_and_returns_url(caplog, monkeypatch) -> None:
@@ -71,15 +71,15 @@ def test_video_url_wait_logs_heartbeat_and_returns_url(caplog, monkeypatch) -> N
 
     assert result == page.url
     assert page.calls == 2
-    assert "nadal oczekuje na potwierdzenie publikacji" in caplog.text
+    assert "still waiting for publication confirmation" in caplog.text
 
 
 def test_visible_wait_rejects_invalid_intervals() -> None:
-    with pytest.raises(ValueError, match="musza byc dodatnie"):
+    with pytest.raises(ValueError, match="must be positive"):
         browser_form.wait_for_visible_with_heartbeat(
             object(),
             platform="cda",
-            field_name="formularz",
+            field_name="form",
             timeout_ms=0,
         )
 
@@ -100,7 +100,7 @@ def test_regular_browser_failure_remains_retriable() -> None:
 
 
 def test_explicit_non_retriable_upload_error_is_respected() -> None:
-    error = browser_form.BrowserUploadError("wynik nieznany", retriable=False)
+    error = browser_form.BrowserUploadError("unknown result", retriable=False)
     assert browser_form.should_retry_browser_error(error) is False
 
 
@@ -112,6 +112,6 @@ def test_wait_checks_cancellation_before_playwright_call() -> None:
         browser_form.wait_for_visible_with_heartbeat(
             object(),
             platform="cda",
-            field_name="formularz",
+            field_name="form",
             cancel_check=cancel,
         )

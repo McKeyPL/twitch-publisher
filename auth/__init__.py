@@ -1,1 +1,1 @@
-"""Autoryzacja sesji przegladarkowych CDA i Rumble."""
+"""Browser-session authentication for CDA and Rumble."""

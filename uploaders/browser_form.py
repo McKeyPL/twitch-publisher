@@ -1,4 +1,4 @@
-"""Male, testowalne narzedzia dla formularzy Playwright."""
+"""Small, testable helpers for Playwright forms."""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ CANCEL_POLL_INTERVAL_MS = 1000
 
 try:
     from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
-except ImportError:  # pragma: no cover - Playwright jest opcjonalny dla testow
+except ImportError:  # pragma: no cover - Playwright is optional for unit tests
     PlaywrightTimeoutError = TimeoutError
 
 
@@ -36,7 +36,7 @@ class BrowserUploadError(RuntimeError):
 
 
 def should_retry_browser_error(exc: Exception) -> bool:
-    """Nie ponawia operacji po celowym/fatalnym zamknieciu przegladarki."""
+    """Do not retry after an intentional or fatal browser closure."""
     if isinstance(exc, BrowserUploadError):
         return exc.retriable
     class_name = type(exc).__name__.casefold()
@@ -50,25 +50,25 @@ def should_retry_browser_error(exc: Exception) -> bool:
 
 
 def unique_visible_locator(page: Any, selectors: Iterable[str], field_name: str) -> Any:
-    """Zwraca pierwsza jednoznaczna widoczna kontrolke z listy stabilnych selektorow."""
+    """Return the first unambiguous visible control from stable selectors."""
     for selector in selectors:
         locator = page.locator(selector)
         if locator.count() == 1 and locator.is_visible():
             return locator
     raise BrowserUploadError(
-        f"Nie znaleziono jednoznacznego pola {field_name}; formularz mogl sie zmienic",
+        f"Could not find an unambiguous {field_name} field; the form may have changed",
         retriable=False,
     )
 
 
 def unique_locator(page: Any, selectors: Iterable[str], field_name: str) -> Any:
-    """Jak unique_visible_locator, ale dopuszcza ukryty input typu file."""
+    """Like unique_visible_locator, but allow a hidden file input."""
     for selector in selectors:
         locator = page.locator(selector)
         if locator.count() == 1:
             return locator
     raise BrowserUploadError(
-        f"Nie znaleziono jednoznacznego pola {field_name}; formularz mogl sie zmienic",
+        f"Could not find an unambiguous {field_name} field; the form may have changed",
         retriable=False,
     )
 
@@ -82,7 +82,7 @@ def optional_visible_locator(page: Any, selectors: Iterable[str]) -> Any | None:
 
 
 def visible_error_text(page: Any, selectors: Iterable[str]) -> str | None:
-    """Zwraca pierwszy widoczny komunikat bledu formularza."""
+    """Return the first visible form error message."""
     for selector in selectors:
         locator = page.locator(selector)
         for index in range(locator.count()):
@@ -102,7 +102,7 @@ def capture_browser_debug(
     stage: str,
     take_screenshot: bool = True,
 ) -> Path | None:
-    """Loguje stan DOM i opcjonalnie zapisuje screenshot bez HTML/cookies."""
+    """Log DOM state and optionally save a screenshot without HTML or cookies."""
     try:
         parsed = urlparse(str(page.url))
         safe_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
@@ -177,25 +177,25 @@ def capture_browser_debug(
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         screenshot_path = debug_directory / f"{platform}_{timestamp}_{safe_stage}.png"
         page.screenshot(path=str(screenshot_path), full_page=True)
-        logger.info("%s: zapisano screenshot diagnostyczny: %s", platform, screenshot_path)
+        logger.info("%s: saved diagnostic screenshot: %s", platform, screenshot_path)
         return screenshot_path
     except Exception:
-        logger.warning("%s: nie udalo sie zebrac diagnostyki przegladarki", platform, exc_info=True)
+        logger.warning("%s: could not collect browser diagnostics", platform, exc_info=True)
         return None
 
 
 def validate_upload_files(video_path: Path, srt_path: Path | None) -> None:
     if not video_path.is_file():
-        raise BrowserUploadError(f"Plik wideo nie istnieje: {video_path}", retriable=False)
+        raise BrowserUploadError(f"Video file does not exist: {video_path}", retriable=False)
     if srt_path is not None and not srt_path.is_file():
-        raise BrowserUploadError(f"Plik SRT nie istnieje: {srt_path}", retriable=False)
+        raise BrowserUploadError(f"SRT file does not exist: {srt_path}", retriable=False)
 
 
 def report_manual_captions(platform: str, srt_path: Path | None) -> None:
     if srt_path is None or srt_path.stat().st_size == 0:
         return
     logger.warning(
-        "%s: formularz nie ma pola SRT; napisy wymagaja manualnego dodania: %s",
+        "%s: the form has no SRT field; captions require manual addition: %s",
         platform,
         srt_path,
     )
@@ -212,9 +212,9 @@ def wait_for_visible_with_heartbeat(
     cancel_check: Callable[[], None] | None = None,
     heartbeat_probe: Callable[[], None] | None = None,
 ) -> None:
-    """Czeka na kontrolke, okresowo potwierdzajac ze proces nadal pracuje."""
+    """Wait for a control while periodically confirming the process is alive."""
     if timeout_ms <= 0 or heartbeat_interval_ms <= 0:
-        raise ValueError("timeout i interwal heartbeat musza byc dodatnie")
+        raise ValueError("timeout and heartbeat interval must be positive")
 
     started = time.monotonic()
     deadline = started + timeout_ms / 1000
@@ -226,7 +226,7 @@ def wait_for_visible_with_heartbeat(
         slice_ms = min(CANCEL_POLL_INTERVAL_MS, remaining_ms)
         try:
             locator.wait_for(state="visible", timeout=slice_ms)
-            logger.info("%s: pole %s jest gotowe", platform, field_name)
+            logger.info("%s: %s field is ready", platform, field_name)
             return
         except PlaywrightTimeoutError as exc:
             if cancel_check is not None:
@@ -235,20 +235,20 @@ def wait_for_visible_with_heartbeat(
             failure = failure_probe() if failure_probe is not None else None
             if failure:
                 raise BrowserUploadError(
-                    f"Formularz zglosil blad podczas oczekiwania na {field_name}: "
+                    f"The form reported an error while waiting for {field_name}: "
                     f"{failure}",
                     retriable=False,
                 ) from exc
             if time.monotonic() >= deadline:
                 raise BrowserUploadError(
-                    f"Przekroczono limit oczekiwania na {field_name} "
+                    f"Timed out while waiting for {field_name} "
                     f"({timeout_ms / 1000:.0f} s)",
                     retriable=True,
                 ) from exc
             if time.monotonic() >= next_heartbeat:
                 logger.info(
-                    "%s: nadal oczekuje na %s (%.0f s); "
-                    "sam heartbeat nie potwierdza transferu danych",
+                    "%s: still waiting for %s (%.0f s); "
+                    "the heartbeat alone does not confirm data transfer",
                     platform,
                     field_name,
                     elapsed,
@@ -267,7 +267,7 @@ def wait_for_video_url(
     page: Any,
     pattern: str,
     *,
-    platform: str = "formularz",
+    platform: str = "form",
     cancel_check: Callable[[], None] | None = None,
     heartbeat_probe: Callable[[], None] | None = None,
 ) -> str:
@@ -290,14 +290,14 @@ def wait_for_video_url(
                 cancel_check()
             if time.monotonic() >= deadline:
                 raise BrowserUploadError(
-                    "Nie potwierdzono zakonczenia uploadu po wyslaniu formularza. "
-                    "Nie ponawiam automatycznie, aby nie utworzyc duplikatu.",
+                    "Upload completion was not confirmed after form submission. "
+                    "Automatic retry is disabled to avoid creating a duplicate.",
                     retriable=False,
                     manual_review_required=True,
                 ) from exc
             if time.monotonic() >= next_heartbeat:
                 logger.info(
-                    "%s: nadal oczekuje na potwierdzenie publikacji (%.0f s)",
+                    "%s: still waiting for publication confirmation (%.0f s)",
                     platform,
                     time.monotonic() - started,
                 )
@@ -306,8 +306,8 @@ def wait_for_video_url(
                 next_heartbeat = time.monotonic() + HEARTBEAT_INTERVAL_MS / 1000
         except Exception as exc:
             raise BrowserUploadError(
-                "Przegladarka przerwala oczekiwanie na potwierdzenie publikacji. "
-                "Nie ponawiam automatycznie, aby nie utworzyc duplikatu.",
+                "The browser interrupted publication-confirmation waiting. "
+                "Automatic retry is disabled to avoid creating a duplicate.",
                 retriable=False,
                 manual_review_required=True,
             ) from exc

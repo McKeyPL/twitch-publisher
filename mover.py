@@ -1,4 +1,4 @@
-"""Przenoszenie kompletnie przetworzonych nagran do katalogu ``_uploaded``."""
+"""Move fully processed recordings into the ``_uploaded`` directory."""
 
 from __future__ import annotations
 
@@ -42,7 +42,7 @@ def _validate_uploaded_directory_name(name: str) -> str:
         or "/" in cleaned
         or "\\" in cleaned
     ):
-        raise ValueError("uploaded_directory_name musi byc pojedyncza nazwa katalogu")
+        raise ValueError("uploaded_directory_name must be a single directory name")
     return cleaned
 
 
@@ -50,7 +50,7 @@ def _move_companions(
     sources: Sequence[Path],
     destination_directory: Path,
 ) -> list[str]:
-    """Przenosi opcjonalne pliki, kontynuujac po kazdym pojedynczym bledzie."""
+    """Move optional companion files, continuing after individual failures."""
     warnings: list[str] = []
     for source in sources:
         destination = destination_directory / source.name
@@ -58,8 +58,8 @@ def _move_companions(
         if destination.exists():
             if source.exists():
                 warning = (
-                    f"Plik towarzyszacy istnieje jednoczesnie w zrodle i celu: "
-                    f"{source}; wymagana manualna interwencja"
+                    f"Companion file exists at both source and destination: "
+                    f"{source}; manual intervention is required"
                 )
                 warnings.append(warning)
                 logger.warning(warning)
@@ -70,12 +70,12 @@ def _move_companions(
 
         try:
             if source.suffix.casefold() == ".srt" and source.stat().st_size == 0:
-                logger.info("Przenoszenie pustego pliku napisow SRT: %s", source)
+                logger.info("Moving an empty SRT captions file: %s", source)
             shutil.move(str(source), str(destination))
         except (OSError, shutil.Error) as exc:
             warning = (
-                f"Nie przeniesiono pliku towarzyszacego {source} do "
-                f"{destination}: {exc}; wymagana manualna interwencja"
+                f"Could not move companion file {source} to {destination}: {exc}; "
+                "manual intervention is required"
             )
             warnings.append(warning)
             logger.warning(warning)
@@ -89,22 +89,22 @@ def move_processed_recording(
     state_store: StateStore,
     required_platforms: list[str],
 ) -> MoveResult:
-    """Przenosi MKV i obecne pliki towarzyszace po sukcesie wszystkich platform.
+    """Move the MKV and existing companion files after all platforms succeed.
 
-    MKV jest przenoszony pierwszy. Po jego sukcesie problemy z SRT/meta nie
-    uruchamiaja rollbacku nagrania; sa raportowane w ``MoveResult.warnings``.
+    The MKV is moved first. Once it succeeds, SRT/metadata failures do not roll
+    the video back; they are reported in ``MoveResult.warnings``.
     """
     video = Path(video_path).expanduser().resolve(strict=False)
 
     try:
         fully_processed = state_store.is_fully_processed(video, required_platforms)
     except Exception as exc:
-        reason = f"Nie mozna sprawdzic statusu platform dla {video}: {exc}"
+        reason = f"Cannot check platform status for {video}: {exc}"
         logger.exception(reason)
         return MoveResult(moved=False, reason=reason)
 
     if not fully_processed:
-        reason = "Nie wszystkie wymagane platformy maja status SUCCESS albo SKIPPED"
+        reason = "Not all required platforms have SUCCESS or SKIPPED status"
         logger.info("%s: %s", reason, video)
         return MoveResult(moved=False, reason=reason)
 
@@ -113,7 +113,7 @@ def move_processed_recording(
             config.moving.uploaded_directory_name
         )
     except (AttributeError, TypeError, ValueError) as exc:
-        reason = f"Niepoprawna konfiguracja katalogu docelowego: {exc}"
+        reason = f"Invalid destination-directory configuration: {exc}"
         logger.error(reason)
         return MoveResult(moved=False, reason=reason)
 
@@ -121,37 +121,37 @@ def move_processed_recording(
     destination_video = destination_directory / video.name
     companion_sources = _companion_paths(video)
 
-    # Poprzednia operacja mogla przeniesc MKV i zakonczyc proces przed SRT/meta.
+    # A previous operation may have moved the MKV and exited before SRT/metadata.
     if not video.exists() and destination_video.is_file():
         try:
             destination_directory.mkdir(parents=True, exist_ok=True)
-        except OSError as exc:  # praktycznie tylko race/uprawnienia do katalogu
-            reason = f"Nie mozna otworzyc katalogu docelowego {destination_directory}: {exc}"
+        except OSError as exc:  # normally a race or directory permission issue
+            reason = f"Cannot open destination directory {destination_directory}: {exc}"
             logger.error(reason)
             return MoveResult(moved=False, reason=reason)
 
         warnings = _move_companions(companion_sources, destination_directory)
-        logger.info("Nagranie bylo juz przeniesione: %s", destination_video)
+        logger.info("Recording was already moved: %s", destination_video)
         return MoveResult(
             moved=True,
             already_done=True,
-            reason="Plik MKV znajduje sie juz w katalogu docelowym",
+            reason="The MKV file is already in the destination directory",
             destination=destination_video,
             warnings=warnings,
         )
 
     if not video.is_file():
         reason = (
-            f"Plik MKV zniknal lub nie jest zwyklym plikiem: {video}; "
-            "nie znaleziono go rowniez w katalogu docelowym"
+            f"The MKV disappeared or is not a regular file: {video}; "
+            "it was not found in the destination directory either"
         )
         logger.error(reason)
         return MoveResult(moved=False, reason=reason)
 
     if destination_video.exists():
         reason = (
-            f"Plik MKV istnieje jednoczesnie w zrodle i celu: {destination_video}; "
-            "odmowa nadpisania, wymagana manualna interwencja"
+            f"The MKV exists at both source and destination: {destination_video}; "
+            "refusing to overwrite, manual intervention is required"
         )
         logger.error(reason)
         return MoveResult(moved=False, reason=reason, destination=destination_video)
@@ -160,7 +160,7 @@ def move_processed_recording(
         destination_directory.mkdir(parents=True, exist_ok=True)
         shutil.move(str(video), str(destination_video))
     except (OSError, shutil.Error) as exc:
-        reason = f"Nie przeniesiono glownego pliku MKV {video}: {exc}"
+        reason = f"Could not move the main MKV file {video}: {exc}"
         logger.exception(reason)
         return MoveResult(
             moved=False,
@@ -168,11 +168,10 @@ def move_processed_recording(
             destination=destination_video,
         )
 
-    logger.info("Przeniesiono nagranie %s do %s", video, destination_video)
+    logger.info("Moved recording %s to %s", video, destination_video)
     warnings = _move_companions(companion_sources, destination_directory)
     return MoveResult(
         moved=True,
         destination=destination_video,
         warnings=warnings,
     )
-

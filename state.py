@@ -1,4 +1,4 @@
-"""Trwaly stan publikacji nagran per platforma w SQLite."""
+"""Persistent per-platform recording publication state in SQLite."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from typing import Iterable
 
 
 class StateStoreError(RuntimeError):
-    """Operacja na stanie uploadu nie moze zostac wykonana."""
+    """An upload-state operation cannot be completed."""
 
 
 class Platform(str, Enum):
@@ -95,41 +95,41 @@ def _coerce_platform(platform: str | Platform) -> Platform:
     if isinstance(platform, Platform):
         return platform
     if not isinstance(platform, str):
-        raise StateStoreError("Platforma musi byc tekstem albo wartoscia Platform")
+        raise StateStoreError("platform must be a string or Platform value")
     try:
         return Platform(platform.strip().lower())
     except ValueError as exc:
         allowed = ", ".join(item.value for item in Platform)
-        raise StateStoreError(f"Nieznana platforma {platform!r}; dozwolone: {allowed}") from exc
+        raise StateStoreError(f"Unknown platform {platform!r}; allowed values: {allowed}") from exc
 
 
 def _normalize_video_path(video_path: str | Path) -> Path:
     if not isinstance(video_path, (str, Path)):
-        raise StateStoreError("video_path musi byc sciezka")
+        raise StateStoreError("video_path must be path-like")
     raw = str(video_path).strip()
     if not raw:
-        raise StateStoreError("video_path nie moze byc puste")
+        raise StateStoreError("video_path cannot be empty")
     if "\x00" in raw:
-        raise StateStoreError("video_path zawiera niedozwolony znak NUL")
+        raise StateStoreError("video_path contains a forbidden NUL character")
 
     absolute = Path(raw).expanduser().resolve(strict=False)
-    # normcase zapobiega duplikatom roznicym sie tylko wielkoscia liter na Windows.
+    # normcase prevents duplicates that differ only by letter case on Windows.
     return Path(os.path.normcase(str(absolute)))
 
 
 def _ensure_schema(connection: sqlite3.Connection) -> None:
-    """Tworzy aktualny schemat; funkcja jest bezpieczna przy kazdym otwarciu."""
+    """Create the current schema; safe to call whenever the database opens."""
     connection.executescript(_SCHEMA)
     connection.commit()
 
 
 class StateStore:
-    """Jedno dlugowieczne polaczenie SQLite dla procesu publikujacego."""
+    """One long-lived SQLite connection for the publisher process."""
 
     def __init__(self, database_path: str | Path) -> None:
         raw_path = str(database_path).strip()
         if not raw_path:
-            raise StateStoreError("Sciezka bazy danych nie moze byc pusta")
+            raise StateStoreError("The database path cannot be empty")
 
         self.database_path = Path(raw_path)
         if raw_path != ":memory:":
@@ -169,7 +169,7 @@ class StateStore:
 
     def _require_connection(self) -> sqlite3.Connection:
         if self._connection is None:
-            raise StateStoreError("StateStore jest zamkniety")
+            raise StateStoreError("StateStore is closed")
         return self._connection
 
     @staticmethod
@@ -230,8 +230,8 @@ class StateStore:
                 ),
             )
         record = self.get_status(normalized_path, normalized_platform)
-        if record is None:  # pragma: no cover - zabezpieczenie integralnosci SQLite
-            raise StateStoreError("Nie udalo sie utworzyc rekordu statusu")
+        if record is None:  # pragma: no cover - SQLite integrity safeguard
+            raise StateStoreError("Could not create the status record")
         return record
 
     def _set_status(
@@ -247,7 +247,7 @@ class StateStore:
         current = self.get_or_create_status(video_path, platform)
         if current.status in {UploadStatus.SUCCESS, UploadStatus.SKIPPED}:
             if current.status is status:
-                # Idempotentne ponowienie moze uzupelnic ID, ale nie licznik prob.
+                # An idempotent repeat may fill in the ID without changing attempts.
                 if status is UploadStatus.SUCCESS and platform_video_id is not None:
                     connection = self._require_connection()
                     with connection:
@@ -267,8 +267,8 @@ class StateStore:
                     return self.get_status(current.video_path, current.platform)  # type: ignore[return-value]
                 return current
             raise StateStoreError(
-                f"Nie mozna zmienic koncowego statusu {current.status.value} "
-                f"na {status.value}"
+                f"Cannot change terminal status {current.status.value} "
+                f"to {status.value}"
             )
 
         connection = self._require_connection()
@@ -295,7 +295,7 @@ class StateStore:
             )
         record = self.get_status(current.video_path, current.platform)
         if record is None:  # pragma: no cover
-            raise StateStoreError("Rekord zniknal podczas aktualizacji")
+            raise StateStoreError("The record disappeared during the update")
         return record
 
     def mark_in_progress(
@@ -324,7 +324,7 @@ class StateStore:
         reason: str,
     ) -> UploadStatusRecord:
         if not isinstance(reason, str) or not reason.strip():
-            raise StateStoreError("Powod pominiecia nie moze byc pusty")
+            raise StateStoreError("The skip reason cannot be empty")
         return self._set_status(
             video_path,
             platform,
@@ -339,7 +339,7 @@ class StateStore:
         error_message: str,
     ) -> UploadStatusRecord:
         if not isinstance(error_message, str) or not error_message.strip():
-            raise StateStoreError("Komunikat bledu nie moze byc pusty")
+            raise StateStoreError("The error message cannot be empty")
         return self._set_status(
             video_path,
             platform,
@@ -357,7 +357,7 @@ class StateStore:
         current = self.get_or_create_status(video_path, platform)
         if current.status is not UploadStatus.SUCCESS:
             raise StateStoreError(
-                f"Nie mozna ustawic {column} przed udanym uploadem wideo"
+                f"Cannot set {column} before a successful video upload"
             )
         connection = self._require_connection()
         with connection:
@@ -375,7 +375,7 @@ class StateStore:
             )
         record = self.get_status(current.video_path, current.platform)
         if record is None:  # pragma: no cover
-            raise StateStoreError("Rekord zniknal podczas aktualizacji flagi")
+            raise StateStoreError("The record disappeared while updating the flag")
         return record
 
     def mark_captions_uploaded(
@@ -388,7 +388,7 @@ class StateStore:
     ) -> UploadStatusRecord:
         normalized_platform = _coerce_platform(platform)
         if normalized_platform is not Platform.YOUTUBE:
-            raise StateStoreError("Flaga playlist_added jest dostepna tylko dla YouTube")
+            raise StateStoreError("playlist_added is available only for YouTube")
         return self._mark_flag(video_path, normalized_platform, "playlist_added")
 
     def is_fully_processed(
@@ -406,9 +406,9 @@ class StateStore:
         )
 
     def get_quota_usage(self, bucket: str, period: str) -> int:
-        """Zwraca lokalnie zarezerwowane jednostki dla okresu rozliczeniowego."""
+        """Return locally reserved units for a quota period."""
         if not bucket.strip() or not period.strip():
-            raise StateStoreError("Bucket i okres quoty nie moga byc puste")
+            raise StateStoreError("Quota bucket and period cannot be empty")
         row = self._require_connection().execute(
             """
             SELECT units FROM api_quota_usage
@@ -425,19 +425,19 @@ class StateStore:
         cost: int,
         limit: int,
     ) -> tuple[bool, int]:
-        """Atomowo rezerwuje quote; zwraca ``(sukces, wykorzystanie_po_operacji)``."""
+        """Reserve quota atomically and return ``(success, usage_after_operation)``."""
         if isinstance(cost, bool) or not isinstance(cost, int) or cost <= 0:
-            raise StateStoreError("cost musi byc dodatnia liczba calkowita")
+            raise StateStoreError("cost must be a positive integer")
         if (
             isinstance(limit, bool)
             or not isinstance(limit, int)
             or limit <= 0
         ):
-            raise StateStoreError("limit musi byc dodatnia liczba calkowita")
+            raise StateStoreError("limit must be a positive integer")
         normalized_bucket = bucket.strip().lower()
         normalized_period = period.strip()
         if not normalized_bucket or not normalized_period:
-            raise StateStoreError("Bucket i okres quoty nie moga byc puste")
+            raise StateStoreError("Quota bucket and period cannot be empty")
 
         connection = self._require_connection()
         now = _serialize_datetime(_utc_now())

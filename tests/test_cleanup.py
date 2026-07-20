@@ -45,5 +45,5 @@ def test_real_cleanup_removes_video_and_companions(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize("invalid", ["..", "../outside", "folder/sub", "", "."])
 def test_rejects_unsafe_uploaded_directory_name(tmp_path: Path, invalid: str) -> None:
-    with pytest.raises(ValueError, match="pojedyncza nazwa"):
+    with pytest.raises(ValueError, match="single directory name"):
         cleanup_uploaded_recordings(tmp_path, invalid, 30)

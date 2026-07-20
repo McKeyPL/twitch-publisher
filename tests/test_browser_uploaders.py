@@ -54,9 +54,9 @@ def test_platform_names_and_playlist_support(tmp_path: Path) -> None:
 def test_missing_video_returns_failure_without_opening_browser(tmp_path: Path) -> None:
     uploader = CDAUploader(platform(tmp_path, "cda"), browser(), retry())
     uploader._session_manager = object()
-    result = uploader.upload(tmp_path / "missing.mkv", "Tytul", "Opis", [])
+    result = uploader.upload(tmp_path / "missing.mkv", "Title", "Description", [])
     assert result.success is False
-    assert "nie istnieje" in (result.error_message or "")
+    assert "does not exist" in (result.error_message or "")
 
 
 def test_rumble_requires_explicit_license_before_opening_browser(tmp_path: Path) -> None:
@@ -65,7 +65,7 @@ def test_rumble_requires_explicit_license_before_opening_browser(tmp_path: Path)
     uploader = RumbleUploader(platform(tmp_path, "rumble"), browser(), retry())
     uploader._session_manager = object()
 
-    result = uploader.upload(video, "Tytul", "Opis", [])
+    result = uploader.upload(video, "Title", "Description", [])
 
     assert result.success is False
     assert "RUMBLE_LICENSE_OPTION" in (result.error_message or "")
@@ -82,10 +82,10 @@ def test_rumble_rejects_file_over_har_limit_before_browser(tmp_path: Path) -> No
     uploader = RumbleUploader(config, browser(), retry())
     uploader._session_manager = object()
 
-    result = uploader.upload(video, "Tytul", "Opis", [])
+    result = uploader.upload(video, "Title", "Description", [])
 
     assert result.success is False
-    assert "limit Rumble" in (result.error_message or "")
+    assert "exceeds the Rumble" in (result.error_message or "")
 
 
 class FakeLocator:
@@ -189,7 +189,7 @@ def test_rumble_hidden_confirmation_uses_change_event_and_hidden_value() -> None
                 return checkbox
             if selector == "#rights":
                 return hidden
-            raise AssertionError(f"Nieoczekiwany selektor: {selector}")
+            raise AssertionError(f"Unexpected selector: {selector}")
 
     _accept_rumble_confirmation(ConfirmationPage(), "crights")
 
@@ -265,7 +265,7 @@ def test_cancel_token_stops_before_opening_browser(tmp_path: Path) -> None:
     uploader._session_manager = object()
 
     with pytest.raises(UploadCancelled):
-        uploader.upload(video, "Tytul", "Opis", [])
+        uploader.upload(video, "Title", "Description", [])
 
 
 class FakeEvaluatePage:
@@ -379,7 +379,7 @@ def test_cda_current_add_to_service_button_is_supported() -> None:
 def test_cda_result_url_is_read_from_generated_dom_link() -> None:
     class ResultLink(FakeLocator):
         def input_value(self):
-            raise AssertionError("input_value nie moze byc wywolane dla elementu <a>")
+            raise AssertionError("input_value cannot be called for an <a> element")
 
     class ResultPage:
         url = "https://www.cda.pl/uploader_video"

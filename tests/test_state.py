@@ -30,12 +30,12 @@ def test_pending_in_progress_success_cycle_and_wal(tmp_path: Path) -> None:
         assert success.attempts == 1
         assert success.updated_at >= success.created_at
 
-        # Powtorne potwierdzenie sukcesu jest idempotentne.
+        # Reconfirming success is idempotent.
         repeated = store.mark_success(video, "youtube", "yt-video-id")
         assert repeated.attempts == 1
 
-    # sqlite3.Connection.__exit__ robi commit/rollback, ale nie zamyka polaczenia.
-    # closing jest konieczny na Windows, aby tmp_path nie pozostal zablokowany.
+    # sqlite3.Connection.__exit__ commits or rolls back but does not close.
+    # Explicit closing is required on Windows so tmp_path is not left locked.
     with closing(sqlite3.connect(database)) as connection:
         assert connection.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal"
 
@@ -91,14 +91,14 @@ def test_captions_and_playlist_flags_are_independent(tmp_path: Path) -> None:
         assert playlist.playlist_added is True
 
         store.mark_success(video, Platform.CDA, "cda-url")
-        with pytest.raises(StateStoreError, match="tylko dla YouTube"):
+        with pytest.raises(StateStoreError, match="only for YouTube"):
             store.mark_playlist_added(video, Platform.CDA)
 
 
 def test_store_rejects_operations_after_close(tmp_path: Path) -> None:
     store = StateStore(tmp_path / "state.sqlite3")
     store.close()
-    with pytest.raises(StateStoreError, match="zamkniety"):
+    with pytest.raises(StateStoreError, match="is closed"):
         store.get_status(tmp_path / "stream.mkv", Platform.YOUTUBE)
 
 

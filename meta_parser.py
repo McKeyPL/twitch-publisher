@@ -1,4 +1,4 @@
-"""Parser plikow ``*_meta.txt`` generowanych po zakonczeniu streama."""
+"""Parse ``*_meta.txt`` files generated after a stream ends."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from pathlib import Path
 
 
 class MetadataError(ValueError):
-    """Plik metadanych istnieje, ale nie ma poprawnego formatu."""
+    """The metadata file exists but has an invalid format."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,14 +23,14 @@ class StreamMetadata:
 
     @property
     def duration_seconds(self) -> float | None:
-        """Czas streama z metadanych; ffprobe pozostaje zrodlem prawdy dla MKV."""
+        """Metadata duration; ffprobe remains authoritative for the MKV file."""
         if self.ended is None:
             return None
         return (self.ended - self.started).total_seconds()
 
 
 def _read_key_values(text: str) -> dict[str, str]:
-    """Czyta ``Key : value`` i obsluguje wciecia kontynuujace dlugie wartosci."""
+    """Read ``Key : value`` lines and indented value continuations."""
     values: dict[str, str] = {}
     current_key: str | None = None
 
@@ -38,8 +38,8 @@ def _read_key_values(text: str) -> dict[str, str]:
         if not raw_line.strip():
             continue
 
-        # Wciecie oznacza kontynuacje wartosci (np. dlugiego tytulu), nawet gdy
-        # sama wartosc zawiera dwukropek.
+        # Indentation continues the previous value (for example a long title),
+        # even when that value contains a colon.
         if raw_line[:1].isspace() and current_key is not None:
             continuation = raw_line.strip()
             if continuation:
@@ -54,7 +54,7 @@ def _read_key_values(text: str) -> dict[str, str]:
                 current_key = key
                 continue
 
-        raise MetadataError(f"Niepoprawna linia {line_number}: {raw_line!r}")
+        raise MetadataError(f"Invalid line {line_number}: {raw_line!r}")
 
     return values
 
@@ -64,7 +64,7 @@ def _parse_datetime(value: str, field_name: str) -> datetime:
         return datetime.fromisoformat(value)
     except ValueError as exc:
         raise MetadataError(
-            f"Pole {field_name!r} nie jest data ISO-8601: {value!r}"
+            f"Field {field_name!r} is not an ISO-8601 date: {value!r}"
         ) from exc
 
 
@@ -73,29 +73,29 @@ def parse_meta_file(
     *,
     expected_channel: str | None = None,
 ) -> StreamMetadata:
-    """Parsuje metadane i opcjonalnie sprawdza nick wzgledem folderu streamera."""
+    """Parse metadata and optionally validate the channel against its folder."""
     source_path = Path(path)
     try:
         text = source_path.read_text(encoding="utf-8-sig")
     except OSError as exc:
-        raise MetadataError(f"Nie mozna odczytac {source_path}: {exc}") from exc
+        raise MetadataError(f"Cannot read {source_path}: {exc}") from exc
 
     values = _read_key_values(text)
     missing = [name for name in ("channel", "title", "started") if not values.get(name)]
     if missing:
-        raise MetadataError(f"Brak wymaganych pol: {', '.join(missing)}")
+        raise MetadataError(f"Required fields are missing: {', '.join(missing)}")
 
     channel = values["channel"].strip()
     if expected_channel and channel.casefold() != expected_channel.strip().casefold():
         raise MetadataError(
-            f"Channel {channel!r} nie zgadza sie z folderem {expected_channel!r}"
+            f"Channel {channel!r} does not match folder {expected_channel!r}"
         )
 
     started = _parse_datetime(values["started"], "Started")
     ended_value = values.get("ended", "").strip()
     ended = _parse_datetime(ended_value, "Ended") if ended_value else None
     if ended is not None and ended < started:
-        raise MetadataError("Pole Ended jest wczesniejsze niz Started")
+        raise MetadataError("Ended is earlier than Started")
 
     return StreamMetadata(
         channel=channel,
@@ -109,6 +109,6 @@ def parse_meta_file(
 
 
 def meta_path_for_video(video_path: str | Path) -> Path:
-    """Zwraca sciezke metadanych zgodna z konwencja ``film_meta.txt``."""
+    """Return the metadata path following the ``video_meta.txt`` convention."""
     video = Path(video_path)
     return video.with_name(f"{video.stem}_meta.txt")

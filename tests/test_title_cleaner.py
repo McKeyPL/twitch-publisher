@@ -8,7 +8,7 @@ from meta_parser import StreamMetadata
 from title_cleaner import TitleError, build_final_title, clean_title, title_from_metadata
 
 
-TEMPLATE = "{tytul_czysty} | {nick} | {data_YYYY-MM-DD}"
+TEMPLATE = "{clean_title} | {channel} | {date_YYYY-MM-DD}"
 
 
 class CleanTitleTests(unittest.TestCase):
@@ -66,7 +66,7 @@ class BuildFinalTitleTests(unittest.TestCase):
         self.assertIn("… | mrozopl | 2026-07-12", result)
 
     def test_raises_if_fixed_template_part_exceeds_limit(self) -> None:
-        with self.assertRaisesRegex(TitleError, "nie mieszcza sie"):
+        with self.assertRaisesRegex(TitleError, "exceed max_length"):
             build_final_title("Tytuł", "bardzo_dlugi_nick", date(2026, 7, 12), TEMPLATE, 10)
 
     def test_builds_title_from_stream_metadata(self) -> None:

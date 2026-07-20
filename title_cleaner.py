@@ -1,4 +1,4 @@
-"""Czyszczenie tytulow Twitcha i budowanie tytulow platform docelowych."""
+"""Clean Twitch titles and build titles for destination platforms."""
 
 from __future__ import annotations
 
@@ -10,18 +10,18 @@ from meta_parser import StreamMetadata
 
 
 class TitleError(ValueError):
-    """Tytul albo jego szablon nie pozwala zbudowac poprawnego wyniku."""
+    """A title or its template cannot produce a valid result."""
 
 
-# Regex rozpoznaje token zaczynajacy sie od "!" na poczatku tekstu albo po bialym
-# znaku. ``(?<!\S)`` nie dopasuje wykrzyknika wewnatrz slowa (np. "DSS!"), a
-# ``[^\s!]+`` usuwa tresc komendy do kolejnego bialego znaku. Dziala zatem takze
-# dla tagow w srodku tytulu, o ile sa osobnymi tokenami, nie tylko na jego koncu.
+# The regex recognizes a token starting with "!" at the beginning of the text or
+# after whitespace. ``(?<!\S)`` does not match an exclamation mark inside a word
+# (for example "DSS!"), while ``[^\s!]+`` consumes the command until whitespace.
+# It therefore handles standalone commands in the middle, not only at the end.
 TWITCH_COMMAND_RE = re.compile(r"(?<!\S)![^\s!]+", flags=re.UNICODE)
 UNDERSCORES_RE = re.compile(r"_+")
 WHITESPACE_RE = re.compile(r"\s+")
 
-_ALLOWED_TEMPLATE_FIELDS = {"tytul_czysty", "nick", "data_YYYY-MM-DD"}
+_ALLOWED_TEMPLATE_FIELDS = {"clean_title", "channel", "date_YYYY-MM-DD"}
 
 
 def _fallback_title(nick: str | None, stream_date: date | None) -> str:
@@ -30,7 +30,7 @@ def _fallback_title(nick: str | None, stream_date: date | None) -> str:
         parts.append(nick.strip())
     if stream_date is not None:
         if not isinstance(stream_date, date):
-            raise TypeError("stream_date musi byc obiektem datetime.date")
+            raise TypeError("stream_date must be a datetime.date instance")
         parts.append(stream_date.isoformat())
     return " ".join(parts)
 
@@ -41,13 +41,13 @@ def clean_title(
     nick: str | None = None,
     stream_date: date | None = None,
 ) -> str:
-    """Usuwa komendy Twitcha i normalizuje tytul bez usuwania emoji ani nawiasow.
+    """Remove Twitch commands and normalize a title without removing emoji or brackets.
 
-    Opcjonalne ``nick`` i ``stream_date`` pozwalaja utworzyc fallback, gdy po
-    czyszczeniu nic nie zostanie albo tytul jest tylko nazwa kanalu.
+    Optional ``nick`` and ``stream_date`` values provide a fallback when cleaning
+    leaves no content or the title contains only the channel name.
     """
     if not isinstance(raw_title, str):
-        raise TypeError("raw_title musi byc tekstem")
+        raise TypeError("raw_title must be a string")
 
     cleaned = TWITCH_COMMAND_RE.sub(" ", raw_title)
     cleaned = UNDERSCORES_RE.sub(" ", cleaned)
@@ -61,19 +61,19 @@ def clean_title(
 
 def _validate_template(template: str) -> None:
     if not isinstance(template, str) or not template:
-        raise TitleError("Szablon tytulu nie moze byc pusty")
+        raise TitleError("The title template cannot be empty")
 
     try:
         parsed = list(Formatter().parse(template))
     except ValueError as exc:
-        raise TitleError(f"Niepoprawny szablon tytulu: {exc}") from exc
+        raise TitleError(f"Invalid title template: {exc}") from exc
 
     fields = [field_name for _, field_name, _, _ in parsed if field_name is not None]
     unknown = sorted(set(fields) - _ALLOWED_TEMPLATE_FIELDS)
     if unknown:
-        raise TitleError(f"Nieznane pola szablonu: {', '.join(unknown)}")
-    if fields.count("tytul_czysty") != 1:
-        raise TitleError("Szablon musi zawierac dokladnie jedno pole {tytul_czysty}")
+        raise TitleError(f"Unknown template fields: {', '.join(unknown)}")
+    if fields.count("clean_title") != 1:
+        raise TitleError("The template must contain exactly one {clean_title} field")
 
 
 def build_final_title(
@@ -83,45 +83,45 @@ def build_final_title(
     template: str,
     max_length: int | None,
 ) -> str:
-    """Wypelnia szablon, skracajac w razie potrzeby tylko czysty tytul."""
+    """Fill the template, shortening only the cleaned title when necessary."""
     if not isinstance(clean_title, str) or not clean_title:
-        raise TitleError("clean_title nie moze byc pusty")
+        raise TitleError("clean_title cannot be empty")
     if not isinstance(nick, str) or not nick.strip():
-        raise TitleError("nick nie moze byc pusty")
+        raise TitleError("nick cannot be empty")
     if not isinstance(stream_date, date):
-        raise TypeError("stream_date musi byc obiektem datetime.date")
+        raise TypeError("stream_date must be a datetime.date instance")
     if max_length is not None and (
         isinstance(max_length, bool) or not isinstance(max_length, int) or max_length <= 0
     ):
-        raise TitleError("max_length musi byc dodatnia liczba calkowita albo None")
+        raise TitleError("max_length must be a positive integer or None")
 
     _validate_template(template)
     values = {
-        "tytul_czysty": clean_title,
-        "nick": nick.strip(),
-        "data_YYYY-MM-DD": stream_date.isoformat(),
+        "clean_title": clean_title,
+        "channel": nick.strip(),
+        "date_YYYY-MM-DD": stream_date.isoformat(),
     }
     try:
         result = template.format(**values)
     except (KeyError, ValueError) as exc:
-        raise TitleError(f"Nie mozna wypelnic szablonu tytulu: {exc}") from exc
+        raise TitleError(f"Cannot fill the title template: {exc}") from exc
 
     if max_length is None or len(result) <= max_length:
         return result
 
-    without_title = template.format(**{**values, "tytul_czysty": ""})
+    without_title = template.format(**{**values, "clean_title": ""})
     available_for_title = max_length - len(without_title)
     if available_for_title < 1:
         raise TitleError(
-            "Nick, data i stala czesc szablonu nie mieszcza sie w max_length; "
-            "nie mozna skrocic tytulu bez naruszenia stalych elementow"
+            "The channel, date, and fixed template text exceed max_length; "
+            "the title cannot be shortened without changing fixed elements"
         )
 
-    prefix_length = available_for_title - 1  # jedno miejsce rezerwujemy na "…"
+    prefix_length = available_for_title - 1  # reserve one character for "…"
     shortened = clean_title[:prefix_length].rstrip() + "…"
-    result = template.format(**{**values, "tytul_czysty": shortened})
-    if len(result) > max_length:  # zabezpieczenie przy przyszlych zmianach szablonu
-        raise TitleError("Nie udalo sie dopasowac tytulu do max_length")
+    result = template.format(**{**values, "clean_title": shortened})
+    if len(result) > max_length:  # safeguard against future template changes
+        raise TitleError("Could not fit the title within max_length")
     return result
 
 
@@ -130,7 +130,7 @@ def title_from_metadata(
     template: str,
     max_length: int | None,
 ) -> str:
-    """Buduje tytul platformy bezposrednio z parsed ``StreamMetadata``."""
+    """Build a platform title directly from parsed ``StreamMetadata``."""
     stream_date = metadata.started.date()
     cleaned = clean_title(
         metadata.title,
@@ -144,4 +144,3 @@ def title_from_metadata(
         template,
         max_length,
     )
-

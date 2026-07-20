@@ -1,4 +1,4 @@
-"""Reczne czyszczenie starych nagran z katalogow ``_uploaded``."""
+"""Manually clean old recordings from ``_uploaded`` directories."""
 
 from __future__ import annotations
 
@@ -38,7 +38,7 @@ def _validate_uploaded_directory_name(name: str) -> str:
         or "/" in cleaned
         or "\\" in cleaned
     ):
-        raise ValueError("uploaded_directory_name musi byc pojedyncza nazwa katalogu")
+        raise ValueError("uploaded_directory_name must be a single directory name")
     return cleaned
 
 
@@ -46,7 +46,7 @@ def _assert_inside(path: Path, directory: Path) -> None:
     try:
         path.resolve(strict=False).relative_to(directory.resolve(strict=False))
     except ValueError as exc:
-        raise ValueError(f"Odmowa operacji poza katalogiem _uploaded: {path}") from exc
+        raise ValueError(f"Refusing to operate outside an _uploaded directory: {path}") from exc
 
 
 def _recording_files(video: Path) -> tuple[Path, ...]:
@@ -65,9 +65,9 @@ def cleanup_uploaded_recordings(
     dry_run: bool = True,
     now: float | None = None,
 ) -> CleanupReport:
-    """Kwalifikuje lub usuwa stare komplety plikow z katalogow uploadu."""
+    """Select or delete old recording sets from uploaded directories."""
     if retention_days <= 0:
-        raise ValueError("retention_days musi byc wieksze od zera")
+        raise ValueError("retention_days must be greater than zero")
     uploaded_name = _validate_uploaded_directory_name(uploaded_directory_name)
     root = Path(recordings_root).resolve(strict=False)
     cutoff = (time.time() if now is None else now) - retention_days * 86400
@@ -76,7 +76,7 @@ def cleanup_uploaded_recordings(
     total_bytes = 0
 
     if not root.is_dir():
-        logger.info("Katalog nagran nie istnieje: %s", root)
+        logger.info("Recordings directory does not exist: %s", root)
         return CleanupReport((), (), 0, dry_run)
 
     uploaded_directories = sorted(
@@ -101,16 +101,16 @@ def cleanup_uploaded_recordings(
                     candidates.append(path)
                     total_bytes += size
                     if dry_run:
-                        logger.info("DRY-RUN: usunieto by %s", path)
+                        logger.info("DRY-RUN: would delete %s", path)
                     else:
                         path.unlink()
                         deleted.append(path)
-                        logger.info("Usunieto %s", path)
+                        logger.info("Deleted %s", path)
             except OSError as exc:
-                logger.error("Nie mozna przetworzyc %s: %s", video, exc)
+                logger.error("Cannot process %s: %s", video, exc)
 
     logger.info(
-        "Cleanup: kandydaci=%d, usuniete=%d, rozmiar=%.2f MB, dry_run=%s",
+        "Cleanup: candidates=%d, deleted=%d, size=%.2f MB, dry_run=%s",
         len(candidates),
         len(deleted),
         total_bytes / (1024 * 1024),

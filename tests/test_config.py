@@ -22,6 +22,7 @@ def valid_raw_config() -> dict:
     raw["platforms"]["youtube"]["client_secrets_file"] = "auth/credentials.json"
     raw["browser"]["firefox_profile_path"] = ""
     raw["platforms"]["youtube"]["playlists"] = {"mrozopl": ""}
+    raw["paths"]["recordings_root"] = r"E:\TwitchRecordings"
     return raw
 
 
@@ -68,7 +69,7 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(config.paths.recordings_root, Path(r"E:\TwitchRecordings"))
         self.assertEqual(config.platforms.youtube.category_id, "20")
         self.assertEqual(config.platforms.youtube.captions_language, "pl")
-        self.assertEqual(config.platforms.youtube.captions_name, "Czat Twitch")
+        self.assertEqual(config.platforms.youtube.captions_name, "Twitch Chat")
         self.assertEqual(config.platforms.youtube.daily_upload_limit, 100)
         self.assertEqual(config.platforms.rumble.primary_category, "Gaming")
         self.assertEqual(config.platforms.rumble.max_file_size_gb, 15.0)
@@ -138,8 +139,14 @@ class ConfigValidationTests(unittest.TestCase):
     def test_rejects_relative_recordings_root(self) -> None:
         raw = valid_raw_config()
         raw["paths"]["recordings_root"] = "recordings"
-        with self.assertRaisesRegex(ConfigError, "absolutna sciezka Windows"):
+        with self.assertRaisesRegex(ConfigError, "absolute Windows, UNC, or POSIX path"):
             config_from_dict(raw)
+
+    def test_accepts_absolute_posix_recordings_root(self) -> None:
+        raw = valid_raw_config()
+        raw["paths"]["recordings_root"] = "/srv/twitch-recordings"
+        config = config_from_dict(raw)
+        self.assertEqual(config.paths.recordings_root.as_posix(), "/srv/twitch-recordings")
 
 
 if __name__ == "__main__":

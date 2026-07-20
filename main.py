@@ -1,4 +1,4 @@
-"""Orkiestracja watchera, uploaderow, stanu SQLite i przenoszenia plikow."""
+"""Orchestrate the watcher, uploaders, SQLite state, and file movement."""
 
 from __future__ import annotations
 
@@ -40,12 +40,12 @@ def _request_stop(
     signum: int,
     frame: object,
 ) -> None:
-    """SIGINT przerywa aktywna operacje; SIGTERM konczy po biezacym kroku."""
+    """SIGINT interrupts the active operation; SIGTERM stops after this step."""
     if signum == getattr(signal, "SIGINT", None):
         stop_event.set()
-        logger.info("Otrzymano SIGINT; przerywam aktywna operacje")
+        logger.info("Received SIGINT; interrupting the active operation")
         raise KeyboardInterrupt
-    logger.info("Otrzymano sygnal %s; koncze po biezacym kroku", signum)
+    logger.info("Received signal %s; stopping after the current step", signum)
     stop_event.set()
 
 
@@ -119,7 +119,7 @@ def _video_path_from_metadata(metadata: StreamMetadata) -> Path:
     suffix = "_meta.txt"
     name = metadata.source_path.name
     if not name.endswith(suffix):
-        raise ValueError(f"Niepoprawna nazwa pliku metadanych: {metadata.source_path}")
+        raise ValueError(f"Invalid metadata filename: {metadata.source_path}")
     return metadata.source_path.with_name(f"{name[:-len(suffix)]}.mkv")
 
 
@@ -137,12 +137,12 @@ def _format_duration(seconds: float) -> str:
 
 def build_description(metadata: StreamMetadata, duration_seconds: float) -> str:
     lines = [
-        f"Nagranie streama: {metadata.channel}",
-        f"Data rozpoczecia: {metadata.started.isoformat(sep=' ')}",
-        f"Czas trwania: {_format_duration(duration_seconds)}",
+        f"Stream recording: {metadata.channel}",
+        f"Started: {metadata.started.isoformat(sep=' ')}",
+        f"Duration: {_format_duration(duration_seconds)}",
     ]
     if metadata.game:
-        lines.append(f"Gra/kategoria: {metadata.game}")
+        lines.append(f"Game/category: {metadata.game}")
     return "\n".join(lines)
 
 
@@ -167,11 +167,11 @@ def _mark_exception_failed(
     platform: str,
     exc: Exception,
 ) -> None:
-    message = f"Nieoczekiwany blad uploadera: {exc}"
+    message = f"Unexpected uploader error: {exc}"
     try:
         state_store.mark_failed(video_path, platform, message)
     except Exception:
-        logger.exception("Nie udalo sie zapisac statusu FAILED dla %s/%s", video_path, platform)
+        logger.exception("Could not store FAILED status for %s/%s", video_path, platform)
     logger.exception("%s: %s", platform, message)
 
 
@@ -183,7 +183,7 @@ def process_ready_recording(
     state_store: StateStore,
     uploaders: Mapping[str, BaseUploader],
 ) -> None:
-    """Przetwarza jedno gotowe nagranie, izolujac kazda platforme."""
+    """Process one ready recording while isolating each platform."""
     required_platforms = list(uploaders)
     description = build_description(metadata, duration_seconds)
     tags = build_tags(metadata)
@@ -196,7 +196,7 @@ def process_ready_recording(
                 UploadStatus.SUCCESS,
                 UploadStatus.SKIPPED,
             }:
-                logger.info("%s: pomijam zakonczony status %s", platform, current.status.value)
+                logger.info("%s: skipping terminal status %s", platform, current.status.value)
                 continue
             if (
                 current is not None
@@ -204,8 +204,8 @@ def process_ready_recording(
                 and (current.last_error or "").startswith(NO_AUTO_RETRY_PREFIX)
             ):
                 logger.warning(
-                    "%s: wymagana reczna weryfikacja poprzedniego uploadu; "
-                    "nie ponawiam automatycznie: %s",
+                    "%s: the previous upload requires manual verification; "
+                    "automatic retry is disabled: %s",
                     platform,
                     current.last_error,
                 )
@@ -213,7 +213,7 @@ def process_ready_recording(
 
             limit = _platform_limit(config, platform)
             if limit is not None and exceeds_duration_limit(duration_seconds, limit):
-                reason = f"Czas {_format_duration(duration_seconds)} przekracza limit {limit:g} h"
+                reason = f"Duration {_format_duration(duration_seconds)} exceeds the {limit:g} h limit"
                 state_store.mark_skipped(video_path, platform, reason)
                 logger.warning("%s: %s", platform, reason)
                 continue
@@ -226,11 +226,11 @@ def process_ready_recording(
             state_store.mark_in_progress(video_path, platform)
             result = uploader.upload(video_path, title, description, tags, srt_path)
             if not result.success:
-                error = result.error_message or "Uploader zwrocil success=False"
+                error = result.error_message or "Uploader returned success=False"
                 if not result.retry_allowed:
                     error = f"{NO_AUTO_RETRY_PREFIX}{error}"
                 state_store.mark_failed(video_path, platform, error)
-                logger.error("%s: upload %s nie powiodl sie: %s", platform, video_path, error)
+                logger.error("%s: upload %s failed: %s", platform, video_path, error)
                 continue
 
             stored_identifier = (
@@ -240,7 +240,7 @@ def process_ready_recording(
             )
             state_store.mark_success(video_path, platform, stored_identifier)
             logger.info(
-                "%s: upload zakonczony sukcesem; zapisano identyfikator/URL: %s",
+                "%s: upload completed successfully; stored identifier/URL: %s",
                 platform,
                 stored_identifier,
             )
@@ -262,7 +262,7 @@ def process_ready_recording(
         video_path, config, state_store, required_platforms
     )
     if move_result.moved:
-        logger.info("Przeniesiono przetworzone nagranie do %s", move_result.destination)
+        logger.info("Moved processed recording to %s", move_result.destination)
     for warning in move_result.warnings:
         logger.warning("Mover: %s", warning)
 
@@ -288,7 +288,7 @@ def process_readiness_results(
                 video_path, result.metadata, duration, config, state_store, uploaders
             )
         except Exception:
-            logger.exception("Nieoczekiwany blad przetwarzania gotowego nagrania")
+            logger.exception("Unexpected error while processing a ready recording")
 
 
 def run_cycle(
@@ -331,14 +331,14 @@ def run(config: Config, *, once: bool = False) -> int:
                 try:
                     run_cycle(config, store, tracker, uploaders)
                 except Exception:
-                    # Awaria calego skanu (np. chwilowy blad dysku) nie moze
-                    # zakonczyc dlugo dzialajacego procesu.
-                    logger.exception("Nieoczekiwany blad cyklu; sprobuje ponownie")
+                    # A complete scan failure (for example a temporary disk error)
+                    # must not terminate the long-running process.
+                    logger.exception("Unexpected cycle error; will retry")
                 if once:
                     break
                 stop_event.wait(config.watcher.poll_interval_seconds)
         except KeyboardInterrupt:
-            logger.info("Przerwano przez uzytkownika")
+            logger.info("Interrupted by the user")
     return 0
 
 
@@ -349,7 +349,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--browser-debug",
         action="store_true",
-        help="Pokaz okno Playwright i zapisz trace/screenshoty diagnostyczne",
+        help="Show the Playwright window and capture diagnostic traces/screenshots",
     )
     return parser
 

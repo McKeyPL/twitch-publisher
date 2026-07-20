@@ -73,7 +73,7 @@ def test_moves_zero_byte_srt_and_logs_info(
     moved_srt = streamer / "_uploaded" / srt.name
     assert result.moved is True
     assert moved_srt.is_file() and moved_srt.stat().st_size == 0
-    assert "pustego pliku napisow SRT" in caplog.text
+    assert "empty SRT captions file" in caplog.text
 
 
 def test_does_nothing_when_not_fully_processed(tmp_path: Path, config: Config) -> None:
@@ -87,7 +87,7 @@ def test_does_nothing_when_not_fully_processed(tmp_path: Path, config: Config) -
         result = move_processed_recording(video, config, store, REQUIRED_PLATFORMS)
 
     assert result.moved is False
-    assert "Nie wszystkie" in (result.reason or "")
+    assert "Not all required platforms" in (result.reason or "")
     assert video.exists() and srt.exists() and meta.exists()
     assert not (streamer / "_uploaded").exists()
 
@@ -136,7 +136,7 @@ def test_race_condition_video_disappears_before_shutil_move(
         result = move_processed_recording(video, config, store, REQUIRED_PLATFORMS)
 
     assert result.moved is False
-    assert "Nie przeniesiono glownego pliku MKV" in (result.reason or "")
+    assert "Could not move the main MKV file" in (result.reason or "")
 
 
 def test_companion_failure_does_not_roll_back_video_or_stop_meta(
@@ -151,7 +151,7 @@ def test_companion_failure_does_not_roll_back_video_or_stop_meta(
 
     def fail_for_srt(source: str, destination: str) -> str:
         if Path(source).suffix.casefold() == ".srt":
-            raise PermissionError("SRT jest zablokowany")
+            raise PermissionError("SRT is locked")
         return real_move(source, destination)
 
     monkeypatch.setattr(mover.shutil, "move", fail_for_srt)
@@ -162,9 +162,8 @@ def test_companion_failure_does_not_roll_back_video_or_stop_meta(
     destination = streamer / "_uploaded"
     assert result.moved is True
     assert len(result.warnings) == 1
-    assert "manualna interwencja" in result.warnings[0]
+    assert "manual intervention" in result.warnings[0]
     assert (destination / video.name).is_file()
     assert srt.is_file()
     assert (destination / meta.name).is_file()
     assert not meta.exists()
-

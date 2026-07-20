@@ -65,7 +65,7 @@ def make_recording(root: Path, stem: str = "stream") -> tuple[Path, StreamMetada
     video = directory / f"{stem}.mkv"
     video.write_bytes(b"video")
     srt = directory / f"{stem}_chat.srt"
-    srt.write_text("1\n00:00:00,000 --> 00:00:01,000\nCzat", encoding="utf-8")
+    srt.write_text("1\n00:00:00,000 --> 00:00:01,000\nChat", encoding="utf-8")
     meta_path = directory / f"{stem}_meta.txt"
     meta_path.write_text("metadata", encoding="utf-8")
     metadata = StreamMetadata(
@@ -199,7 +199,7 @@ def test_unknown_browser_outcome_is_not_retried_next_cycle(tmp_path: Path, monke
     uploaders = successful_uploaders(config)
     uploaders["cda"].result = UploadResult(
         False,
-        error_message="wynik publikacji nieznany",
+        error_message="publication result unknown",
         retry_allowed=False,
     )
 

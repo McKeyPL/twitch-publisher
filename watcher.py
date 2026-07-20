@@ -1,4 +1,4 @@
-"""Jednorazowe, nieblokujace skanowanie katalogu nagran Twitch."""
+"""Single-pass, non-blocking scanning of Twitch recording directories."""
 
 from __future__ import annotations
 
@@ -21,11 +21,11 @@ def iter_candidate_recordings(
     recordings_root: Path,
     uploaded_directory_name: str,
 ) -> Iterator[Path]:
-    """Rekurencyjnie zwraca MKV, pomijajac katalogi docelowe uploadu."""
+    """Yield MKV files recursively while skipping uploaded directories."""
     root = Path(recordings_root)
     uploaded_name = uploaded_directory_name.strip().casefold()
     if not uploaded_name:
-        raise ValueError("uploaded_directory_name nie moze byc puste")
+        raise ValueError("uploaded_directory_name cannot be empty")
     if not root.is_dir():
         return
 
@@ -53,7 +53,7 @@ def scan_cycle(
     expected_channel: str | None = None,
     now: float | None = None,
 ) -> list[ReadinessResult]:
-    """Sprawdza wszystkich kandydatow raz i zwraca rowniez wyniki oczekujace."""
+    """Check every candidate once and include non-ready results."""
     root = Path(recordings_root)
     results: list[ReadinessResult] = []
     for video_path in iter_candidate_recordings(root, uploaded_directory_name):
@@ -68,7 +68,7 @@ def scan_cycle(
         )
         results.append(result)
         if result.status is not ReadinessStatus.READY:
-            logger.info("Nagranie oczekuje: %s - %s", video_path, result.reason)
+            logger.info("Recording is waiting: %s - %s", video_path, result.reason)
         else:
-            logger.debug("Nagranie gotowe: %s", video_path)
+            logger.debug("Recording is ready: %s", video_path)
     return results

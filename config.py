@@ -1,11 +1,11 @@
-"""Wczytywanie, podstawianie zmiennych i walidacja ``config.yaml``."""
+"""Load, expand environment variables, and validate ``config.yaml``."""
 
 from __future__ import annotations
 
 import os
 import re
 from dataclasses import dataclass, field
-from pathlib import Path, PureWindowsPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Mapping
 
 import yaml
@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 
 
 class ConfigError(ValueError):
-    """Konfiguracja jest niekompletna albo ma niepoprawny format."""
+    """The configuration is incomplete or has an invalid format."""
 
 
 _ENV_PATTERN = re.compile(
@@ -27,7 +27,7 @@ def expand_environment_variables(
     environ: Mapping[str, str] | None = None,
     location: str = "config",
 ) -> Any:
-    """Rekurencyjnie rozwija ``${VAR}`` i ``${VAR:-default}`` w dict/list/string."""
+    """Recursively expand ``${VAR}`` and ``${VAR:-default}`` in strings."""
     environment = os.environ if environ is None else environ
 
     if isinstance(value, dict):
@@ -60,7 +60,7 @@ def expand_environment_variables(
             return env_value if env_value else default
         if env_value is None:
             raise ConfigError(
-                f"Brak wymaganej zmiennej srodowiskowej {name!r} w {location}"
+                f"Required environment variable {name!r} is missing at {location}"
             )
         return env_value
 
@@ -178,40 +178,40 @@ class Config:
 
 def _mapping(value: Any, location: str) -> Mapping[str, Any]:
     if not isinstance(value, dict):
-        raise ConfigError(f"{location} musi byc mapa YAML")
+        raise ConfigError(f"{location} must be a YAML mapping")
     return value
 
 
 def _required(section: Mapping[str, Any], key: str, location: str) -> Any:
     if key not in section:
-        raise ConfigError(f"Brak wymaganego pola {location}.{key}")
+        raise ConfigError(f"Required field {location}.{key} is missing")
     return section[key]
 
 
 def _string(value: Any, location: str, *, allow_empty: bool = False) -> str:
     if not isinstance(value, str):
-        raise ConfigError(f"{location} musi byc tekstem")
+        raise ConfigError(f"{location} must be a string")
     result = value.strip()
     if not allow_empty and not result:
-        raise ConfigError(f"{location} nie moze byc puste")
+        raise ConfigError(f"{location} cannot be empty")
     return result
 
 
 def _boolean(value: Any, location: str) -> bool:
     if not isinstance(value, bool):
-        raise ConfigError(f"{location} musi miec wartosc true albo false")
+        raise ConfigError(f"{location} must be true or false")
     return value
 
 
 def _positive_float(value: Any, location: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
-        raise ConfigError(f"{location} musi byc liczba wieksza od zera")
+        raise ConfigError(f"{location} must be greater than zero")
     return float(value)
 
 
 def _positive_int(value: Any, location: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-        raise ConfigError(f"{location} musi byc liczba calkowita wieksza od zera")
+        raise ConfigError(f"{location} must be a positive integer")
     return value
 
 
@@ -235,26 +235,28 @@ def _path(value: Any, location: str, *, allow_empty: bool = False) -> Path | Non
     if not text and allow_empty:
         return None
     if "\x00" in text:
-        raise ConfigError(f"{location} zawiera niedozwolony znak NUL")
+        raise ConfigError(f"{location} contains a forbidden NUL character")
     return Path(text)
 
 
-def _windows_absolute_path(value: Any, location: str) -> Path:
+def _absolute_path(value: Any, location: str) -> Path:
     text = _string(value, location)
     if "\x00" in text:
-        raise ConfigError(f"{location} zawiera niedozwolony znak NUL")
+        raise ConfigError(f"{location} contains a forbidden NUL character")
 
     windows_path = PureWindowsPath(text)
-    if not windows_path.is_absolute():
+    posix_path = PurePosixPath(text)
+    if not windows_path.is_absolute() and not posix_path.is_absolute():
         raise ConfigError(
-            f"{location} musi byc absolutna sciezka Windows, np. "
-            r"E:\TwitchRecordings lub \\server\share\TwitchRecordings"
+            f"{location} must be an absolute Windows, UNC, or POSIX path, for example "
+            r"E:\TwitchRecordings, \\server\share\TwitchRecordings, or /srv/twitch-recordings"
         )
 
-    invalid_characters = set('<>"|?*')
-    for part in windows_path.parts[1:]:
-        if invalid_characters.intersection(part) or ":" in part:
-            raise ConfigError(f"{location} zawiera niedozwolone znaki: {text!r}")
+    if windows_path.is_absolute():
+        invalid_characters = set('<>"|?*')
+        for part in windows_path.parts[1:]:
+            if invalid_characters.intersection(part) or ":" in part:
+                raise ConfigError(f"{location} contains forbidden characters: {text!r}")
     return Path(text)
 
 
@@ -299,7 +301,7 @@ def _browser_platform(
 
 
 def config_from_dict(raw: Mapping[str, Any]) -> Config:
-    """Buduje i waliduje typowana konfiguracje z rozwinietej mapy YAML."""
+    """Build and validate typed configuration from an expanded YAML mapping."""
     root = _mapping(raw, "config")
     paths = _mapping(_required(root, "paths", "config"), "paths")
     watcher = _mapping(_required(root, "watcher", "config"), "watcher")
@@ -323,8 +325,8 @@ def config_from_dict(raw: Mapping[str, Any]) -> Config:
     )
     if youtube_enabled and not secrets_text:
         raise ConfigError(
-            "platforms.youtube.client_secrets_file musi byc ustawione, "
-            "gdy platforms.youtube.enabled=true"
+            "platforms.youtube.client_secrets_file must be configured when "
+            "platforms.youtube.enabled=true"
         )
 
     playlists_raw = _mapping(
@@ -344,7 +346,7 @@ def config_from_dict(raw: Mapping[str, Any]) -> Config:
         _required(retry, "multiplier", "retry"), "retry.multiplier"
     )
     if multiplier < 1:
-        raise ConfigError("retry.multiplier musi byc co najmniej 1")
+        raise ConfigError("retry.multiplier must be at least 1")
 
     retry_config = RetryConfig(
         max_attempts=_positive_int(
@@ -363,7 +365,7 @@ def config_from_dict(raw: Mapping[str, Any]) -> Config:
 
     return Config(
         paths=PathsConfig(
-            recordings_root=_windows_absolute_path(
+            recordings_root=_absolute_path(
                 _required(paths, "recordings_root", "paths"), "paths.recordings_root"
             ),
             ffprobe=_string(_required(paths, "ffprobe", "paths"), "paths.ffprobe"),
@@ -513,22 +515,22 @@ def load_config(
     *,
     dotenv_path: str | Path | None = None,
 ) -> Config:
-    """Laduje .env, YAML, rozwija zmienne i zwraca zwalidowany obiekt ``Config``."""
+    """Load .env and YAML, expand variables, and return a validated ``Config``."""
     yaml_path = Path(config_path) if config_path else Path(__file__).with_name("config.yaml")
     env_path = Path(dotenv_path) if dotenv_path else yaml_path.with_name(".env")
 
-    # Zmienne procesu maja pierwszenstwo przed wartosciami z .env.
+    # Existing process variables take precedence over values from .env.
     load_dotenv(dotenv_path=env_path, override=False)
 
     try:
         with yaml_path.open("r", encoding="utf-8") as stream:
             raw = yaml.safe_load(stream)
     except OSError as exc:
-        raise ConfigError(f"Nie mozna odczytac konfiguracji {yaml_path}: {exc}") from exc
+        raise ConfigError(f"Cannot read configuration {yaml_path}: {exc}") from exc
     except yaml.YAMLError as exc:
-        raise ConfigError(f"Niepoprawny YAML w {yaml_path}: {exc}") from exc
+        raise ConfigError(f"Invalid YAML in {yaml_path}: {exc}") from exc
 
     if raw is None:
-        raise ConfigError(f"Plik konfiguracji {yaml_path} jest pusty")
+        raise ConfigError(f"Configuration file {yaml_path} is empty")
     expanded = expand_environment_variables(raw)
     return config_from_dict(_mapping(expanded, "config"))

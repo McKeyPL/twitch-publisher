@@ -1,6 +1,6 @@
-# Wszystkie sciezki moga zostac nadpisane argumentami CLI w kolejnych etapach.
+# Paths may be overridden by CLI options added by future stages.
 paths:
-  recordings_root: 'E:\TwitchRecordings'
+  recordings_root: '${RECORDINGS_ROOT:-E:\TwitchRecordings}'
   ffprobe: ffprobe
   database: data/upload_state.sqlite3
   log_directory: logs
@@ -8,13 +8,13 @@ paths:
 
 watcher:
   poll_interval_seconds: 30
-  # Drugi pomiar rozmiaru MKV musi nastapic co najmniej po tym czasie.
+  # The second MKV size sample must occur at least this many seconds later.
   size_stability_seconds: 60
 
 platforms:
   youtube:
     enabled: true
-    # Pusta wartosc jest dozwolona tylko gdy enabled=false; config.py waliduje to pole.
+    # An empty value is allowed only when enabled=false; config.py validates it.
     client_secrets_file: ${YOUTUBE_CLIENT_SECRETS_FILE:-}
     token_file: auth/youtube_token.json
     privacy_status: unlisted
@@ -22,11 +22,11 @@ platforms:
     title_limit: 100
     category_id: "20" # Gaming
     captions_language: pl
-    captions_name: "Czat Twitch"
-    # Granularny bucket videos.insert: domyslnie 100 wywolan/dzien, koszt 1/call.
+    captions_name: "Twitch Chat"
+    # Granular videos.insert bucket: default 100 calls/day at 1 unit per call.
     daily_upload_limit: 100
     daily_quota_units: 10000
-    # To liczniki aplikacji; zrodlem prawdy zawsze pozostaje Google Cloud Console.
+    # These are local counters; Google Cloud Console remains authoritative.
     upload_quota_units: 1
     captions_quota_units: 400
     srt_max_size_mb: 100
@@ -40,14 +40,14 @@ platforms:
 
   cda:
     enabled: true
-    # Formularz wyboru lokalnego pliku (potwierdzone w zalogowanej sesji).
+    # Local-file upload form, confirmed in an authenticated session.
     upload_url: https://www.cda.pl/uploader_video
     storage_state_file: auth/cda_state.json
-    # TODO: zweryfikowac manualnie aktualny limit tytulu i dlugosci filmu.
+    # TODO: manually verify the current title and video-duration limits.
     title_limit: null
     max_duration_hours: null
-    # Domyslnie: film publiczny, wszystkie deklaracje tresci = Nie,
-    # regulamin i oswiadczenie o prawach zaakceptowane.
+    # Defaults: public video, all content declarations set to No,
+    # terms and ownership statement accepted.
     form_options:
       private: false
       accept_terms: true
@@ -62,29 +62,29 @@ platforms:
     enabled: true
     upload_url: https://rumble.com/upload.php
     storage_state_file: auth/rumble_state.json
-    # TODO: zweryfikowac manualnie aktualny limit tytulu i dlugosci filmu.
+    # TODO: manually verify the current title and video-duration limits.
     title_limit: null
     max_duration_hours: null
-    # HAR z 2026-07-20: formularz wymaga kategorii i ogranicza plik do 15 GB.
+    # HAR captured on 2026-07-20: category required, file size limited to 15 GB.
     primary_category: Gaming
     max_file_size_gb: 15
-    # Wymagany wybor praw: 0=Personal Use, 5=exclusive,
+    # Required rights choice: 0=Personal Use, 5=exclusive,
     # 6=Rumble Only (non-exclusive), 7=excluding YouTube.
-    # Puste = Rumble zwroci czytelny blad przed wyslaniem pliku.
+    # Empty means Rumble returns a clear error before file transfer.
     license_option: ${RUMBLE_LICENSE_OPTION:-}
 
 browser:
-  # Opcjonalne. Puste = browser_cookie3 sam wyszuka domyslny profil Firefoksa.
+  # Optional. Empty lets browser_cookie3 locate the default Firefox profile.
   firefox_profile_path: ${FIREFOX_PROFILE_PATH:-}
   headless: true
   interactive_login_headless: false
-  # Nadpisywane przez CLI --browser-debug.
+  # Overridden by the --browser-debug CLI option.
   debug: false
   debug_directory: logs/browser_debug
   debug_screenshot_interval_seconds: 300
 
 metadata:
-  title_template: '{tytul_czysty} | {nick} | {data_YYYY-MM-DD}'
+  title_template: '{clean_title} | {channel} | {date_YYYY-MM-DD}'
   remove_bang_tags: true
 
 retry:
