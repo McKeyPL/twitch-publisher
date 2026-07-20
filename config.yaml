@@ -46,6 +46,17 @@ platforms:
     # TODO: zweryfikowac manualnie aktualny limit tytulu i dlugosci filmu.
     title_limit: null
     max_duration_hours: null
+    # Domyslnie: film publiczny, wszystkie deklaracje tresci = Nie,
+    # regulamin i oswiadczenie o prawach zaakceptowane.
+    form_options:
+      private: false
+      accept_terms: true
+      confirm_rights: true
+      contains_violence: false
+      contains_sex: false
+      contains_addiction: false
+      contains_profanity: false
+      contains_sponsorship: false
 
   rumble:
     enabled: true

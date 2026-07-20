@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path, PureWindowsPath
 from typing import Any, Mapping
 
@@ -111,6 +111,7 @@ class BrowserPlatformConfig:
     primary_category: str | None = None
     license_option: str | None = None
     max_file_size_gb: float | None = None
+    form_options: dict[str, bool] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -262,6 +263,13 @@ def _browser_platform(
     location: str,
 ) -> BrowserPlatformConfig:
     section = _mapping(raw, location)
+    form_options_raw = _mapping(section.get("form_options", {}), f"{location}.form_options")
+    form_options = {
+        _string(key, f"{location}.form_options.<key>"): _boolean(
+            value, f"{location}.form_options.{key}"
+        )
+        for key, value in form_options_raw.items()
+    }
     return BrowserPlatformConfig(
         enabled=_boolean(_required(section, "enabled", location), f"{location}.enabled"),
         upload_url=_string(
@@ -286,6 +294,7 @@ def _browser_platform(
         max_file_size_gb=_optional_positive_float(
             section.get("max_file_size_gb"), f"{location}.max_file_size_gb"
         ),
+        form_options=form_options,
     )
 
 

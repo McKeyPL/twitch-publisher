@@ -7,7 +7,12 @@ from threading import Event
 import pytest
 
 from config import BrowserConfig, BrowserPlatformConfig, RetryConfig
-from uploaders.cda import CDAUploader
+from uploaders.cda import (
+    CDAUploader,
+    _find_cda_title_input,
+    _set_checkbox_by_text,
+    _set_radio_by_question,
+)
 from uploaders.base import UploadCancelled
 from uploaders.rumble import RumbleUploader, _rumble_result_url, _set_category_by_label
 
@@ -145,3 +150,79 @@ def test_cancel_token_stops_before_opening_browser(tmp_path: Path) -> None:
 
     with pytest.raises(UploadCancelled):
         uploader.upload(video, "Tytul", "Opis", [])
+
+
+class FakeEvaluatePage:
+    def __init__(self) -> None:
+        self.arguments = []
+
+    def evaluate(self, script, argument):
+        self.arguments.append(argument)
+        return True
+
+
+def test_cda_semantic_form_answers_are_forwarded() -> None:
+    page = FakeEvaluatePage()
+
+    assert _set_checkbox_by_text(page, "Akceptuje regulamin", True)
+    assert _set_radio_by_question(page, "zawiera przemoc", False)
+
+    assert page.arguments == [
+        {"fragment": "Akceptuje regulamin", "checked": True},
+        {"question": "zawiera przemoc", "answerYes": False},
+    ]
+
+
+class CandidateInput:
+    def __init__(self, value: str, *, placeholder: str = "", identity: str = "") -> None:
+        self.value = value
+        self.placeholder = placeholder
+        self.identity = identity
+
+    def get_attribute(self, name):
+        return {
+            "placeholder": self.placeholder,
+            "id": self.identity,
+            "name": self.identity,
+        }.get(name)
+
+    def input_value(self):
+        return self.value
+
+
+class CandidateList:
+    def __init__(self, items) -> None:
+        self.items = items
+
+    def count(self):
+        return len(self.items)
+
+    def nth(self, index):
+        return self.items[index]
+
+    def is_visible(self):
+        return bool(self.items)
+
+
+class TitlePage:
+    def __init__(self, candidates) -> None:
+        self.candidates = candidates
+
+    def locator(self, selector):
+        if selector in ("#nazwa_wyswietlana", "input[name='nazwa_wyswietlana']"):
+            return CandidateList([])
+        return CandidateList(self.candidates)
+
+
+def test_cda_title_field_is_selected_by_uploaded_filename() -> None:
+    search = CandidateInput("", placeholder="Szukaj", identity="search")
+    tags = CandidateInput("", placeholder="Tagi")
+    title = CandidateInput("20260623 221513 buvanybu Torture room")
+    page = TitlePage([search, tags, title])
+
+    selected = _find_cda_title_input(
+        page,
+        Path("20260623_221513_buvanybu_Torture room.mkv"),
+    )
+
+    assert selected is title

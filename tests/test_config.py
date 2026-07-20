@@ -72,6 +72,9 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(config.platforms.youtube.daily_upload_limit, 100)
         self.assertEqual(config.platforms.rumble.primary_category, "Gaming")
         self.assertEqual(config.platforms.rumble.max_file_size_gb, 15.0)
+        self.assertTrue(config.platforms.cda.form_options["accept_terms"])
+        self.assertTrue(config.platforms.cda.form_options["confirm_rights"])
+        self.assertFalse(config.platforms.cda.form_options["contains_violence"])
         self.assertFalse(hasattr(config.platforms.youtube, "retry"))
 
     def test_loads_rumble_license_from_environment(self) -> None:

@@ -71,6 +71,12 @@ playwright show-trace logs\browser_debug\cda_*_trace.zip
 Trace moze zawierac dane sesji i adresy requestow, dlatego nie nalezy go
 publikowac ani dodawac do Git.
 
+Formularz CDA jest wypelniany semantycznie, bez zaleznosci od jednego historycznego
+ID pola tytulu. Domyslne `platforms.cda.form_options` publikuja film publicznie,
+akceptuja regulamin i oswiadczenie o prawach oraz odpowiadaja `Nie` na pytania o
+przemoc, seks, uzaleznienia, wulgaryzmy i sponsoring. Wartosci mozna zmienic per
+instalacja w `config.yaml`.
+
 Rumble wymaga jawnego wyboru licencji w `.env`:
 
 ```dotenv

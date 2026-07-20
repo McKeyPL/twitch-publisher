@@ -120,6 +120,23 @@ def capture_browser_debug(
                 }))
             }))"""
         )
+        form_controls = page.locator("input, textarea, button").evaluate_all(
+            """elements => elements
+                .filter(element => {
+                    const style = window.getComputedStyle(element);
+                    return style.display !== 'none' && style.visibility !== 'hidden';
+                })
+                .map(element => ({
+                    tag: element.tagName.toLocaleLowerCase(),
+                    id: element.id || null,
+                    name: element.name || null,
+                    type: element.type || null,
+                    placeholder: element.placeholder || null,
+                    value: element.type === 'password' ? '[REDACTED]' :
+                        (element.type === 'hidden' ? '[HIDDEN]' : (element.value || '').slice(0, 200)),
+                    checked: typeof element.checked === 'boolean' ? element.checked : null
+                }))"""
+        )
         diagnostics: list[dict[str, Any]] = []
         selectors = (
             "#upload1",
@@ -144,12 +161,13 @@ def capture_browser_debug(
                     }
                 )
         logger.info(
-            "%s debug[%s]: url=%s title=%r file_inputs=%s dom=%s",
+            "%s debug[%s]: url=%s title=%r file_inputs=%s controls=%s dom=%s",
             platform,
             stage,
             safe_url,
             title,
             file_inputs,
+            form_controls,
             diagnostics,
         )
         if not take_screenshot:
