@@ -49,6 +49,12 @@ Zweryfikowane formularze CDA i Rumble nie udostepniaja pola SRT. Log poda wtedy
 sciezke napisow wymagajacych manualnego dodania. Automatyzacja moze wymagac
 aktualizacji selektorow po zmianach stron.
 
+Przy duzym pliku CDA moze przez dluzszy czas wysylac lub przetwarzac nagranie,
+zanim pokaze formularz metadanych. Uploader zapisuje wtedy heartbeat co 30 sekund.
+Brak heartbeat oznacza problem z procesem lub przegladarka; komunikat heartbeat
+oznacza, ze Playwright nadal aktywnie czeka. Do diagnostyki mozna tymczasowo ustawic
+`browser.headless: false` i obserwowac okno przegladarki.
+
 ## Uruchamianie
 
 Proces uruchamiany jest wylacznie recznie, bez Task Scheduler/cron:

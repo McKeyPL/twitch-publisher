@@ -17,6 +17,7 @@ from uploaders.browser_form import (
     validate_upload_files,
     video_id_from_url,
     wait_for_video_url,
+    wait_for_visible_with_heartbeat,
 )
 
 
@@ -78,11 +79,26 @@ class CDAUploader(BaseUploader):
     ) -> UploadResult:
         with self._session_manager.open("cda", self.config, self._is_authenticated) as session:
             page = session.page
+            size_gib = video_path.stat().st_size / (1024 ** 3)
+            logger.info(
+                "cda: sesja gotowa (%s); wskazuje plik %.2f GiB: %s",
+                page.url,
+                size_gib,
+                video_path,
+            )
             file_input = unique_visible_locator(page, ("#js-upload-files",), "pliku wideo")
-            file_input.set_input_files(str(video_path))
+            file_input.set_input_files(str(video_path), timeout=60_000)
+            logger.info(
+                "cda: plik przekazany formularzowi; oczekuje na zakonczenie "
+                "wysylania i formularz metadanych"
+            )
 
             title_input = page.locator("#nazwa_wyswietlana")
-            title_input.wait_for(state="visible", timeout=12 * 60 * 60 * 1000)
+            wait_for_visible_with_heartbeat(
+                title_input,
+                platform="cda",
+                field_name="formularz metadanych",
+            )
             title_input.fill(title)
             unique_visible_locator(page, ("textarea[name='opis']",), "opisu").fill(description)
             tags_input = optional_visible_locator(
