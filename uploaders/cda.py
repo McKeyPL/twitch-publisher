@@ -13,9 +13,12 @@ from uploaders.browser_form import (
     BrowserUploadError,
     optional_visible_locator,
     report_manual_captions,
+    should_retry_browser_error,
+    unique_locator,
     unique_visible_locator,
     validate_upload_files,
     video_id_from_url,
+    visible_error_text,
     wait_for_video_url,
     wait_for_visible_with_heartbeat,
 )
@@ -63,11 +66,15 @@ class CDAUploader(BaseUploader):
             return self._with_retry(
                 lambda: self._upload_once(video_path, title, description, tags, srt_path),
                 operation_name=f"upload {video_path.name}",
-                should_retry=lambda exc: getattr(exc, "retriable", True),
+                should_retry=should_retry_browser_error,
             )
         except Exception as exc:
             logger.error("cda: upload %s nie powiodl sie: %s", video_path, exc)
-            return UploadResult(success=False, error_message=str(exc))
+            return UploadResult(
+                success=False,
+                error_message=str(exc),
+                retry_allowed=not getattr(exc, "manual_review_required", False),
+            )
 
     def _upload_once(
         self,
@@ -86,7 +93,15 @@ class CDAUploader(BaseUploader):
                 size_gib,
                 video_path,
             )
-            file_input = unique_visible_locator(page, ("#js-upload-files",), "pliku wideo")
+            file_input = unique_locator(
+                page,
+                (
+                    "#js-upload-files",
+                    "#upload1 input[type='file']",
+                    "input[type='file']:not(#miniatura):not([name='miniatura'])",
+                ),
+                "pliku wideo",
+            )
             file_input.set_input_files(str(video_path), timeout=60_000)
             logger.info(
                 "cda: plik przekazany formularzowi; oczekuje na zakonczenie "
@@ -98,6 +113,15 @@ class CDAUploader(BaseUploader):
                 title_input,
                 platform="cda",
                 field_name="formularz metadanych",
+                failure_probe=lambda: visible_error_text(
+                    page,
+                    (
+                        "#upload1 .error",
+                        ".qq-upload-fail .qq-upload-status-text",
+                        ".alert-danger",
+                        ".upload-error",
+                    ),
+                ),
             )
             title_input.fill(title)
             unique_visible_locator(page, ("textarea[name='opis']",), "opisu").fill(description)
@@ -111,12 +135,27 @@ class CDAUploader(BaseUploader):
             )
             if tags_input is not None:
                 tags_input.fill(", ".join(tags))
+            elif tags:
+                hidden_tags = page.locator("input[name='tagi'][type='hidden'], #tags[type='hidden']")
+                if hidden_tags.count() == 1:
+                    hidden_tags.evaluate(
+                        """(element, value) => {
+                            element.value = value;
+                            element.dispatchEvent(new Event('input', {bubbles: true}));
+                            element.dispatchEvent(new Event('change', {bubbles: true}));
+                        }""",
+                        ", ".join(tags),
+                    )
+                    logger.info("cda: uzupelniono ukryte pole tagow z formularza HAR")
+                else:
+                    logger.warning("cda: nie znaleziono pola tagow; pomijam tagi")
 
             report_manual_captions("cda", srt_path)
             terms = optional_visible_locator(page, ("#regulaminField",))
             if terms is not None:
                 terms.set_checked(True)
             submit = unique_visible_locator(page, ("#dodajDoSerwisu",), "przycisku publikacji")
+            logger.info("cda: formularz metadanych wypelniony; publikuje nagranie")
             submit.click()
             url = wait_for_video_url(page, r"cda\.pl/video/")
             return UploadResult(

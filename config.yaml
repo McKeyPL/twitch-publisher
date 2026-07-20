@@ -54,6 +54,13 @@ platforms:
     # TODO: zweryfikowac manualnie aktualny limit tytulu i dlugosci filmu.
     title_limit: null
     max_duration_hours: null
+    # HAR z 2026-07-20: formularz wymaga kategorii i ogranicza plik do 15 GB.
+    primary_category: Gaming
+    max_file_size_gb: 15
+    # Wymagany wybor praw: 0=Personal Use, 5=exclusive,
+    # 6=Rumble Only (non-exclusive), 7=excluding YouTube.
+    # Puste = Rumble zwroci czytelny blad przed wyslaniem pliku.
+    license_option: ${RUMBLE_LICENSE_OPTION:-}
 
 browser:
   # Opcjonalne. Puste = browser_cookie3 sam wyszuka domyslny profil Firefoksa.

@@ -6,7 +6,7 @@ import logging
 import re
 import time
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 from urllib.parse import urlparse
 
 
@@ -21,9 +21,30 @@ except ImportError:  # pragma: no cover - Playwright jest opcjonalny dla testow
 
 
 class BrowserUploadError(RuntimeError):
-    def __init__(self, message: str, *, retriable: bool = True) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        retriable: bool = True,
+        manual_review_required: bool = False,
+    ) -> None:
         super().__init__(message)
         self.retriable = retriable
+        self.manual_review_required = manual_review_required
+
+
+def should_retry_browser_error(exc: Exception) -> bool:
+    """Nie ponawia operacji po celowym/fatalnym zamknieciu przegladarki."""
+    if isinstance(exc, BrowserUploadError):
+        return exc.retriable
+    class_name = type(exc).__name__.casefold()
+    message = str(exc).casefold()
+    target_closed = (
+        "targetclosed" in class_name
+        or "target page, context or browser has been closed" in message
+        or "browser has been closed" in message
+    )
+    return not target_closed
 
 
 def unique_visible_locator(page: Any, selectors: Iterable[str], field_name: str) -> Any:
@@ -38,11 +59,36 @@ def unique_visible_locator(page: Any, selectors: Iterable[str], field_name: str)
     )
 
 
+def unique_locator(page: Any, selectors: Iterable[str], field_name: str) -> Any:
+    """Jak unique_visible_locator, ale dopuszcza ukryty input typu file."""
+    for selector in selectors:
+        locator = page.locator(selector)
+        if locator.count() == 1:
+            return locator
+    raise BrowserUploadError(
+        f"Nie znaleziono jednoznacznego pola {field_name}; formularz mogl sie zmienic",
+        retriable=False,
+    )
+
+
 def optional_visible_locator(page: Any, selectors: Iterable[str]) -> Any | None:
     for selector in selectors:
         locator = page.locator(selector)
         if locator.count() == 1 and locator.is_visible():
             return locator
+    return None
+
+
+def visible_error_text(page: Any, selectors: Iterable[str]) -> str | None:
+    """Zwraca pierwszy widoczny komunikat bledu formularza."""
+    for selector in selectors:
+        locator = page.locator(selector)
+        for index in range(locator.count()):
+            candidate = locator.nth(index)
+            if candidate.is_visible():
+                text = (candidate.text_content() or "").strip()
+                if text:
+                    return text
     return None
 
 
@@ -70,6 +116,7 @@ def wait_for_visible_with_heartbeat(
     field_name: str,
     timeout_ms: int = UPLOAD_TIMEOUT_MS,
     heartbeat_interval_ms: int = HEARTBEAT_INTERVAL_MS,
+    failure_probe: Callable[[], str | None] | None = None,
 ) -> None:
     """Czeka na kontrolke, okresowo potwierdzajac ze proces nadal pracuje."""
     if timeout_ms <= 0 or heartbeat_interval_ms <= 0:
@@ -86,6 +133,13 @@ def wait_for_visible_with_heartbeat(
             return
         except PlaywrightTimeoutError as exc:
             elapsed = time.monotonic() - started
+            failure = failure_probe() if failure_probe is not None else None
+            if failure:
+                raise BrowserUploadError(
+                    f"Formularz zglosil blad podczas oczekiwania na {field_name}: "
+                    f"{failure}",
+                    retriable=False,
+                ) from exc
             if time.monotonic() >= deadline:
                 raise BrowserUploadError(
                     f"Przekroczono limit oczekiwania na {field_name} "
@@ -123,6 +177,7 @@ def wait_for_video_url(page: Any, pattern: str) -> str:
                     "Nie potwierdzono zakonczenia uploadu po wyslaniu formularza. "
                     "Nie ponawiam automatycznie, aby nie utworzyc duplikatu.",
                     retriable=False,
+                    manual_review_required=True,
                 ) from exc
             logger.info(
                 "formularz: nadal oczekuje na potwierdzenie publikacji (%.0f s)",
@@ -133,5 +188,6 @@ def wait_for_video_url(page: Any, pattern: str) -> str:
                 "Przegladarka przerwala oczekiwanie na potwierdzenie publikacji. "
                 "Nie ponawiam automatycznie, aby nie utworzyc duplikatu.",
                 retriable=False,
+                manual_review_required=True,
             ) from exc
     return page.url

@@ -108,6 +108,9 @@ class BrowserPlatformConfig:
     storage_state_file: Path
     title_limit: int | None
     max_duration_hours: float | None
+    primary_category: str | None = None
+    license_option: str | None = None
+    max_file_size_gb: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -216,6 +219,13 @@ def _optional_positive_int(value: Any, location: str) -> int | None:
     return None if value is None else _positive_int(value, location)
 
 
+def _optional_string(value: Any, location: str) -> str | None:
+    if value is None:
+        return None
+    result = _string(value, location, allow_empty=True)
+    return result or None
+
+
 def _path(value: Any, location: str, *, allow_empty: bool = False) -> Path | None:
     text = _string(value, location, allow_empty=allow_empty)
     if not text and allow_empty:
@@ -263,6 +273,15 @@ def _browser_platform(
         ),
         max_duration_hours=_optional_positive_float(
             section.get("max_duration_hours"), f"{location}.max_duration_hours"
+        ),
+        primary_category=_optional_string(
+            section.get("primary_category"), f"{location}.primary_category"
+        ),
+        license_option=_optional_string(
+            section.get("license_option"), f"{location}.license_option"
+        ),
+        max_file_size_gb=_optional_positive_float(
+            section.get("max_file_size_gb"), f"{location}.max_file_size_gb"
         ),
     )
 

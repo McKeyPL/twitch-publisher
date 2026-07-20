@@ -70,7 +70,22 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(config.platforms.youtube.captions_language, "pl")
         self.assertEqual(config.platforms.youtube.captions_name, "Czat Twitch")
         self.assertEqual(config.platforms.youtube.daily_upload_limit, 100)
+        self.assertEqual(config.platforms.rumble.primary_category, "Gaming")
+        self.assertEqual(config.platforms.rumble.max_file_size_gb, 15.0)
         self.assertFalse(hasattr(config.platforms.youtube, "retry"))
+
+    def test_loads_rumble_license_from_environment(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "YOUTUBE_CLIENT_SECRETS_FILE": "auth/credentials.json",
+                "RUMBLE_LICENSE_OPTION": "6",
+            },
+            clear=True,
+        ):
+            config = load_config(CONFIG_PATH, dotenv_path=PROJECT_ROOT / "missing.env")
+
+        self.assertEqual(config.platforms.rumble.license_option, "6")
 
     def test_youtube_credentials_required_when_enabled(self) -> None:
         raw = valid_raw_config()
@@ -87,6 +102,12 @@ class ConfigValidationTests(unittest.TestCase):
         raw = valid_raw_config()
         raw["watcher"]["poll_interval_seconds"] = 0
         with self.assertRaisesRegex(ConfigError, "poll_interval_seconds"):
+            config_from_dict(raw)
+
+    def test_rejects_non_positive_browser_file_size_limit(self) -> None:
+        raw = valid_raw_config()
+        raw["platforms"]["rumble"]["max_file_size_gb"] = 0
+        with self.assertRaisesRegex(ConfigError, "max_file_size_gb"):
             config_from_dict(raw)
 
     def test_rejects_empty_youtube_category_id(self) -> None:

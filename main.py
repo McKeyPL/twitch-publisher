@@ -31,6 +31,20 @@ from watcher import scan_cycle
 
 logger = logging.getLogger(__name__)
 DurationProbe = Callable[[Path], float]
+NO_AUTO_RETRY_PREFIX = "[NO_AUTO_RETRY] "
+
+
+def _request_stop(
+    stop_event: threading.Event,
+    signum: int,
+    frame: object,
+) -> None:
+    """SIGINT przerywa aktywna operacje; SIGTERM konczy po biezacym kroku."""
+    if signum == getattr(signal, "SIGINT", None):
+        logger.info("Otrzymano SIGINT; przerywam aktywna operacje")
+        raise KeyboardInterrupt
+    logger.info("Otrzymano sygnal %s; koncze po biezacym kroku", signum)
+    stop_event.set()
 
 
 class _ColorFormatter(logging.Formatter):
@@ -169,6 +183,18 @@ def process_ready_recording(
             }:
                 logger.info("%s: pomijam zakonczony status %s", platform, current.status.value)
                 continue
+            if (
+                current is not None
+                and current.status is UploadStatus.FAILED
+                and (current.last_error or "").startswith(NO_AUTO_RETRY_PREFIX)
+            ):
+                logger.warning(
+                    "%s: wymagana reczna weryfikacja poprzedniego uploadu; "
+                    "nie ponawiam automatycznie: %s",
+                    platform,
+                    current.last_error,
+                )
+                continue
 
             limit = _platform_limit(config, platform)
             if limit is not None and exceeds_duration_limit(duration_seconds, limit):
@@ -186,6 +212,8 @@ def process_ready_recording(
             result = uploader.upload(video_path, title, description, tags, srt_path)
             if not result.success:
                 error = result.error_message or "Uploader zwrocil success=False"
+                if not result.retry_allowed:
+                    error = f"{NO_AUTO_RETRY_PREFIX}{error}"
                 state_store.mark_failed(video_path, platform, error)
                 logger.error("%s: upload %s nie powiodl sie: %s", platform, video_path, error)
                 continue
@@ -263,13 +291,12 @@ def run(config: Config, *, once: bool = False) -> int:
     configure_logging(config)
     stop_event = threading.Event()
 
-    def request_stop(signum: int, frame: object) -> None:
-        logger.info("Otrzymano sygnal %s; koncze po biezacym kroku", signum)
-        stop_event.set()
-
     for signal_name in ("SIGINT", "SIGTERM"):
         if hasattr(signal, signal_name):
-            signal.signal(getattr(signal, signal_name), request_stop)
+            signal.signal(
+                getattr(signal, signal_name),
+                lambda signum, frame: _request_stop(stop_event, signum, frame),
+            )
 
     with StateStore(config.paths.database) as store:
         uploaders = build_uploaders(config, store)

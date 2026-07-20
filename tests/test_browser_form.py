@@ -70,3 +70,23 @@ def test_visible_wait_rejects_invalid_intervals() -> None:
             field_name="formularz",
             timeout_ms=0,
         )
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        RuntimeError("Target page, context or browser has been closed"),
+        RuntimeError("Browser has been closed"),
+    ],
+)
+def test_closed_browser_is_never_retried(error: Exception) -> None:
+    assert browser_form.should_retry_browser_error(error) is False
+
+
+def test_regular_browser_failure_remains_retriable() -> None:
+    assert browser_form.should_retry_browser_error(RuntimeError("HTTP 503")) is True
+
+
+def test_explicit_non_retriable_upload_error_is_respected() -> None:
+    error = browser_form.BrowserUploadError("wynik nieznany", retriable=False)
+    assert browser_form.should_retry_browser_error(error) is False

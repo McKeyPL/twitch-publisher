@@ -55,6 +55,20 @@ Brak heartbeat oznacza problem z procesem lub przegladarka; komunikat heartbeat
 oznacza, ze Playwright nadal aktywnie czeka. Do diagnostyki mozna tymczasowo ustawic
 `browser.headless: false` i obserwowac okno przegladarki.
 
+Rumble wymaga jawnego wyboru licencji w `.env`:
+
+```dotenv
+# 0=Personal Use; 5=Video Management exclusive;
+# 6=Rumble Only non-exclusive; 7=Video Management excluding YouTube
+RUMBLE_LICENSE_OPTION=6
+```
+
+Kod nie wybiera tej opcji samodzielnie, poniewaz kazda wartosc przekazuje inny
+zakres praw. Na podstawie formularza z 2026-07-20 uploader ustawia kategorie
+glowna `Gaming`, probuje dopasowac gre jako kategorie dodatkowa i odrzuca pliki
+wieksze niz 15 GB przed otwarciem przegladarki. Sukces jest rozpoznawany przez
+formularz `#form3` i pole `textarea#direct`, a nie przez zmiane URL strony.
+
 ## Uruchamianie
 
 Proces uruchamiany jest wylacznie recznie, bez Task Scheduler/cron:
@@ -76,6 +90,10 @@ Watcher utrzymuje jeden nieblokujacy tracker stabilnosci rozmiaru MKV przez caly
 czas procesu. Plik bez `_meta.txt`, bez pola `Ended` albo ze zmieniajacym sie
 rozmiarem nie jest wysylany. Wyjatek jednego pliku lub platformy nie zatrzymuje
 pozostalych. Stan `SUCCESS`/`SKIPPED` w SQLite zapobiega duplikacji po restarcie.
+Ctrl+C przerywa aktywna operacje bez wykonywania kolejnych prob. Jesli serwis
+przyjal formularz, ale nie da sie potwierdzic wyniku, status otrzymuje znacznik
+`[NO_AUTO_RETRY]`; nagranie wymaga wtedy sprawdzenia w panelu platformy i nie jest
+ponawiane automatycznie.
 
 ## Reczne czyszczenie
 

@@ -3,23 +3,84 @@
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 from typing import Callable
+from urllib.parse import urljoin
 
 from auth.browser_session import BrowserSessionManager
 from config import BrowserConfig, BrowserPlatformConfig, RetryConfig
 from uploaders.base import BaseUploader, UploadResult
 from uploaders.browser_form import (
+    BrowserUploadError,
     optional_visible_locator,
     report_manual_captions,
+    should_retry_browser_error,
     unique_visible_locator,
     validate_upload_files,
     video_id_from_url,
-    wait_for_video_url,
+    visible_error_text,
+    wait_for_visible_with_heartbeat,
 )
 
 
 logger = logging.getLogger(__name__)
+LICENSE_LABELS = {
+    "0": "Personal Use",
+    "5": "Video Management (exclusive)",
+    "6": "Rumble Only (non-exclusive)",
+    "7": "Video Management (excluding YouTube)",
+}
+
+
+def _set_category_by_label(page: object, input_selector: str, label: str) -> bool:
+    options = getattr(page, "locator")(".select-option[data-value][data-label]")
+    value = options.evaluate_all(
+        r"""(elements, wanted) => {
+            const normalize = value => value
+                .trim()
+                .toLocaleLowerCase()
+                .replace(/\s*\(video game\)\s*$/, '');
+            const normalized = normalize(wanted);
+            const match = elements.find(
+                element => normalize(element.dataset.label || '') === normalized
+            );
+            return match ? match.dataset.value : null;
+        }""",
+        label,
+    )
+    if not value:
+        return False
+    hidden = getattr(page, "locator")(input_selector)
+    if hidden.count() != 1:
+        return False
+    hidden.evaluate(
+        """(element, selectedValue) => {
+            element.value = selectedValue;
+            element.dispatchEvent(new Event('input', {bubbles: true}));
+            element.dispatchEvent(new Event('change', {bubbles: true}));
+        }""",
+        value,
+    )
+    return True
+
+
+def _rumble_result_url(page: object) -> str:
+    direct = getattr(page, "locator")("#form3 textarea#direct")
+    if direct.count() == 1:
+        value = (direct.input_value() or "").strip()
+        if value:
+            return urljoin("https://rumble.com", value)
+    link = getattr(page, "locator")("#form3 p#view a[href]")
+    if link.count() == 1:
+        value = (link.get_attribute("href") or "").strip()
+        if value:
+            return urljoin("https://rumble.com", value)
+    raise BrowserUploadError(
+        "Rumble pokazal sukces, ale nie zwrocil URL nagrania; sprawdz panel recznie",
+        retriable=False,
+        manual_review_required=True,
+    )
 
 
 class RumbleUploader(BaseUploader):
@@ -57,14 +118,36 @@ class RumbleUploader(BaseUploader):
     ) -> UploadResult:
         try:
             validate_upload_files(video_path, srt_path)
+            license_option = self.config.license_option
+            if license_option not in LICENSE_LABELS:
+                allowed = ", ".join(
+                    f"{code}={label}" for code, label in LICENSE_LABELS.items()
+                )
+                raise BrowserUploadError(
+                    "Ustaw RUMBLE_LICENSE_OPTION w .env przed uploadem Rumble. "
+                    f"Dozwolone wartosci: {allowed}",
+                    retriable=False,
+                )
+            if self.config.max_file_size_gb is not None:
+                limit_bytes = self.config.max_file_size_gb * 1_000_000_000
+                if video_path.stat().st_size > limit_bytes:
+                    raise BrowserUploadError(
+                        f"Plik przekracza limit Rumble {self.config.max_file_size_gb:g} GB: "
+                        f"{video_path}",
+                        retriable=False,
+                    )
             return self._with_retry(
                 lambda: self._upload_once(video_path, title, description, tags, srt_path),
                 operation_name=f"upload {video_path.name}",
-                should_retry=lambda exc: getattr(exc, "retriable", True),
+                should_retry=should_retry_browser_error,
             )
         except Exception as exc:
             logger.error("rumble: upload %s nie powiodl sie: %s", video_path, exc)
-            return UploadResult(success=False, error_message=str(exc))
+            return UploadResult(
+                success=False,
+                error_message=str(exc),
+                retry_allowed=not getattr(exc, "manual_review_required", False),
+            )
 
     def _upload_once(
         self,
@@ -78,8 +161,14 @@ class RumbleUploader(BaseUploader):
             "rumble", self.config, self._is_authenticated
         ) as session:
             page = session.page
+            logger.info(
+                "rumble: sesja gotowa (%s); wskazuje plik %.2f GiB: %s",
+                page.url,
+                video_path.stat().st_size / (1024 ** 3),
+                video_path,
+            )
             unique_visible_locator(page, ("#Filedata",), "pliku wideo").set_input_files(
-                str(video_path)
+                str(video_path), timeout=60_000
             )
             unique_visible_locator(page, ("#title",), "tytulu").fill(title)
             unique_visible_locator(page, ("#description",), "opisu").fill(description)
@@ -90,20 +179,97 @@ class RumbleUploader(BaseUploader):
             if visibility is not None:
                 visibility.set_checked(True)
 
+            primary_category = self.config.primary_category or "Gaming"
+            if not _set_category_by_label(
+                page, "#category_primary", primary_category
+            ):
+                raise BrowserUploadError(
+                    f"Rumble: nie znaleziono kategorii glownej {primary_category!r}",
+                    retriable=False,
+                )
+            logger.info("rumble: ustawiono kategorie glowna %s", primary_category)
+            if len(tags) >= 4:
+                game = tags[-1]
+                if _set_category_by_label(page, "#category_secondary", game):
+                    logger.info("rumble: ustawiono kategorie gry %s", game)
+                else:
+                    logger.info(
+                        "rumble: brak dokladnej kategorii gry %s; pozostaje Gaming",
+                        game,
+                    )
+
             report_manual_captions("rumble", srt_path)
             unique_visible_locator(page, ("#submitForm",), "przycisku Upload").click()
 
             # Rumble pokazuje drugi krok dotyczacy praw/licencji. Pola opisowe sa
             # opcjonalne, lecz potwierdzenie praw i regulaminu jest wymagane.
             final_submit = page.locator("#submitForm2")
-            final_submit.wait_for(state="visible", timeout=12 * 60 * 60 * 1000)
+            wait_for_visible_with_heartbeat(
+                final_submit,
+                platform="rumble",
+                field_name="drugi krok formularza",
+                failure_probe=lambda: visible_error_text(
+                    page,
+                    (
+                        "#error_files",
+                        "#error_files_2",
+                        "#error_video",
+                        "#error_title",
+                        "#error_description",
+                        "#error_categories",
+                        ".upload-error",
+                    ),
+                ),
+            )
+            license_option = self.config.license_option or ""
+            license_control = unique_visible_locator(
+                page,
+                (f"[crcval='{license_option}']",),
+                "opcji licencji Rumble",
+            )
+            license_control.click()
+            logger.info(
+                "rumble: ustawiono licencje %s=%s",
+                license_option,
+                LICENSE_LABELS[license_option],
+            )
             for selector in ("#crights", "#cterms"):
                 checkbox = optional_visible_locator(page, (selector,))
                 if checkbox is not None:
                     checkbox.set_checked(True)
             final_submit.click()
-
-            url = wait_for_video_url(page, r"rumble\.com/(v|embed|account/content)")
+            success_form = page.locator("#form3")
+            try:
+                wait_for_visible_with_heartbeat(
+                    success_form,
+                    platform="rumble",
+                    field_name="potwierdzenie publikacji",
+                    failure_probe=lambda: visible_error_text(
+                        page,
+                        (
+                            "#error_featured",
+                            "#error_rights",
+                            "#error_terms",
+                            "#error_licenseExtra",
+                            "#error_unknown",
+                            "#error_unknown_2",
+                        ),
+                    ),
+                )
+            except BrowserUploadError as exc:
+                raise BrowserUploadError(
+                    f"Nie potwierdzono wyniku publikacji Rumble: {exc}. "
+                    "Sprawdz panel recznie; upload nie bedzie ponawiany.",
+                    retriable=False,
+                    manual_review_required=True,
+                ) from exc
+            url = _rumble_result_url(page)
+            if not re.search(r"rumble\.com/(v|embed|account/content)", url):
+                raise BrowserUploadError(
+                    f"Rumble zwrocil nieoczekiwany URL: {url}; sprawdz panel recznie",
+                    retriable=False,
+                    manual_review_required=True,
+                )
             return UploadResult(
                 success=True,
                 platform_video_id=video_id_from_url(url),

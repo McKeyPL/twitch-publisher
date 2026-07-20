@@ -3,10 +3,14 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
+import signal
+import threading
+
+import pytest
 
 from config import Config, load_config
 from duration_check import ReadinessResult, ReadinessStatus
-from main import process_readiness_results, process_ready_recording
+from main import _request_stop, process_readiness_results, process_ready_recording
 from meta_parser import StreamMetadata
 from state import StateStore, UploadStatus
 from uploaders.base import BaseUploader, UploadResult
@@ -170,3 +174,33 @@ def test_duration_limit_skips_only_limited_platform(tmp_path: Path, monkeypatch)
 
     assert uploaders["youtube"].uploaded == []
     assert not video.exists()
+
+
+def test_sigint_interrupts_active_operation_immediately() -> None:
+    event = threading.Event()
+
+    with pytest.raises(KeyboardInterrupt):
+        _request_stop(event, signal.SIGINT, None)
+
+    assert event.is_set() is False
+
+
+def test_unknown_browser_outcome_is_not_retried_next_cycle(tmp_path: Path, monkeypatch) -> None:
+    config = config_for(tmp_path, monkeypatch)
+    video, metadata = make_recording(config.paths.recordings_root)
+    uploaders = successful_uploaders(config)
+    uploaders["cda"].result = UploadResult(
+        False,
+        error_message="wynik publikacji nieznany",
+        retry_allowed=False,
+    )
+
+    with StateStore(config.paths.database) as store:
+        process_ready_recording(video, metadata, 3600, config, store, uploaders)
+        process_ready_recording(video, metadata, 3600, config, store, uploaders)
+        record = store.get_status(video, "cda")
+
+    assert uploaders["cda"].uploaded == [video]
+    assert record is not None
+    assert record.status is UploadStatus.FAILED
+    assert (record.last_error or "").startswith("[NO_AUTO_RETRY]")

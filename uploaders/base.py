@@ -23,6 +23,7 @@ class UploadResult:
     platform_url: str | None = None
     error_message: str | None = None
     captions_uploaded: bool = False
+    retry_allowed: bool = True
 
 
 class BaseUploader(ABC):
@@ -95,4 +96,3 @@ class BaseUploader(ABC):
                 delay *= self.retry_config.multiplier
 
         raise RuntimeError("Nieosiagalny koniec petli retry")  # pragma: no cover
-
