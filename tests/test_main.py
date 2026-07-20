@@ -99,6 +99,14 @@ def test_end_to_end_success_moves_complete_recording(tmp_path: Path, monkeypatch
             for name in uploaders
         )
         assert store.get_status(video, "youtube").playlist_added is True
+        assert (
+            store.get_status(video, "cda").platform_video_id
+            == "https://cda.test/id"
+        )
+        assert (
+            store.get_status(video, "rumble").platform_video_id
+            == "https://rumble.test/id"
+        )
 
     destination = video.parent / "_uploaded"
     assert (destination / video.name).is_file()

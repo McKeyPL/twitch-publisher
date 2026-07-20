@@ -9,7 +9,10 @@ import pytest
 from config import BrowserConfig, BrowserPlatformConfig, RetryConfig
 from uploaders.cda import (
     CDAUploader,
+    _cda_result_url,
     _find_cda_title_input,
+    _find_cda_submit_button,
+    _read_cda_upload_status,
     _set_checkbox_by_text,
     _set_radio_by_question,
 )
@@ -87,6 +90,13 @@ class FakeLocator:
     def count(self) -> int:
         return 1
 
+    def nth(self, index):
+        assert index == 0
+        return self
+
+    def is_visible(self):
+        return True
+
     def evaluate_all(self, script, label):
         return self.value
 
@@ -98,6 +108,9 @@ class FakeLocator:
 
     def get_attribute(self, name):
         return self.href if name == "href" else None
+
+    def text_content(self):
+        return self._input_value
 
 
 class FakePage:
@@ -171,6 +184,49 @@ def test_cda_semantic_form_answers_are_forwarded() -> None:
         {"fragment": "Akceptuje regulamin", "checked": True},
         {"question": "zawiera przemoc", "answerYes": False},
     ]
+
+
+def test_cda_upload_status_accepts_ready_add_button() -> None:
+    class StatusPage:
+        def evaluate(self, script):
+            assert "dodaj do serwisu" in script
+            return {
+                "complete": True,
+                "complete_marker": False,
+                "submit_ready": True,
+                "percent": 100,
+                "details": ["100%", "12 MB/s"],
+            }
+
+    status = _read_cda_upload_status(StatusPage())
+
+    assert status["complete"] is True
+    assert status["submit_ready"] is True
+    assert status["percent"] == 100
+
+
+def test_cda_current_add_to_service_button_is_supported() -> None:
+    expected_selector = "button[type='button'][data-loading-text*='Dodaj do serwisu']"
+    button = FakeLocator()
+
+    class SubmitPage:
+        def locator(self, selector):
+            if selector == expected_selector:
+                return button
+            return CandidateList([])
+
+    assert _find_cda_submit_button(SubmitPage()) is button
+
+
+def test_cda_result_url_is_read_from_generated_dom_link() -> None:
+    class ResultPage:
+        url = "https://www.cda.pl/uploader_video"
+
+        def locator(self, selector):
+            assert "a[href*='/video/']" in selector
+            return FakeLocator(href="/video/abc123")
+
+    assert _cda_result_url(ResultPage()) == "https://www.cda.pl/video/abc123"
 
 
 class CandidateInput:

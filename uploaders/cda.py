@@ -7,12 +7,15 @@ import re
 import threading
 import time
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
+from urllib.parse import urljoin
 
 from auth.browser_session import BrowserSessionManager
 from config import BrowserConfig, BrowserPlatformConfig, RetryConfig
 from uploaders.base import BaseUploader, UploadResult
 from uploaders.browser_form import (
+    HEARTBEAT_INTERVAL_MS,
+    UPLOAD_TIMEOUT_MS,
     BrowserUploadError,
     capture_browser_debug,
     optional_visible_locator,
@@ -22,9 +25,6 @@ from uploaders.browser_form import (
     unique_visible_locator,
     validate_upload_files,
     video_id_from_url,
-    visible_error_text,
-    wait_for_video_url,
-    wait_for_visible_with_heartbeat,
 )
 
 
@@ -39,6 +39,198 @@ CDA_FORM_DEFAULTS = {
     "contains_profanity": False,
     "contains_sponsorship": False,
 }
+
+
+def _find_cda_submit_button(page: object) -> object:
+    """Znajduje przycisk kończący publikację w obu znanych wariantach CDA."""
+    return unique_visible_locator(
+        page,
+        (
+            "button[type='button'][data-loading-text*='Dodaj do serwisu']",
+            "button:has-text('Dodaj do serwisu')",
+            "#dodajDoSerwisu",
+            "button:has-text('Opublikuj w serwisie')",
+            "input[type='submit'][value*='Dodaj do serwisu']",
+            "input[type='submit'][value*='Opublikuj']",
+        ),
+        "przycisku Dodaj do serwisu",
+    )
+
+
+def _read_cda_upload_status(page: object) -> dict[str, Any]:
+    """Czyta marker zakończenia oraz tekst panelu postępu bez zależności od ID."""
+    result = getattr(page, "evaluate")(
+        r"""() => {
+            const visible = element => {
+                const style = window.getComputedStyle(element);
+                const rect = element.getBoundingClientRect();
+                return style.display !== 'none' && style.visibility !== 'hidden'
+                    && rect.width > 0 && rect.height > 0;
+            };
+            const normalize = value => (value || '').normalize('NFD')
+                .replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase();
+            const bodyText = document.body ? document.body.innerText || '' : '';
+            const normalizedBody = normalize(bodyText);
+            const buttons = Array.from(document.querySelectorAll('button, input[type=submit]'))
+                .filter(visible);
+            const submit = buttons.find(element => {
+                const text = normalize(element.innerText || element.value || '');
+                const loading = normalize(element.getAttribute('data-loading-text') || '');
+                return text.includes('dodaj do serwisu')
+                    || text.includes('opublikuj w serwisie')
+                    || loading.includes('dodaj do serwisu');
+            });
+            const progressNodes = Array.from(document.querySelectorAll(
+                '.progress, .progress-bar, [role=progressbar], .qq-upload-list, '
+                + '.qq-upload-status-text, .qq-upload-size, [class*=speed], [id*=speed]'
+            )).filter(visible);
+            let percent = null;
+            for (const element of progressNodes) {
+                const candidates = [
+                    element.getAttribute('aria-valuenow'),
+                    element.getAttribute('data-percent'),
+                    element.getAttribute('data-progress'),
+                    element.style && element.style.width,
+                    element.innerText,
+                ];
+                for (const value of candidates) {
+                    const match = String(value || '').match(/(\d+(?:[.,]\d+)?)\s*%?/);
+                    if (match) {
+                        const parsed = Number(match[1].replace(',', '.'));
+                        if (Number.isFinite(parsed) && parsed >= 0 && parsed <= 100) {
+                            percent = percent === null ? parsed : Math.max(percent, parsed);
+                        }
+                    }
+                }
+            }
+            const details = Array.from(new Set(bodyText.split(/\r?\n/)
+                .map(line => line.trim())
+                .filter(line => line && (
+                    /\d+(?:[.,]\d+)?\s*%/.test(line)
+                    || /\d+(?:[.,]\d+)?\s*(?:k|m|g|t)?b\s*\/\s*s/i.test(line)
+                    || /pr[eę]dko|pozosta|wysy[lł]|przes[lł]an|upload/i.test(line)
+                )))).slice(0, 12);
+            const completeMarker = normalizedBody.includes(
+                'film zostal przeslany i oczekuje na publikacje'
+            );
+            return {
+                complete: completeMarker || Boolean(submit && !submit.disabled),
+                complete_marker: completeMarker,
+                submit_ready: Boolean(submit && !submit.disabled),
+                percent,
+                details,
+            };
+        }"""
+    )
+    return dict(result or {})
+
+
+def _wait_for_cda_upload_complete(
+    page: object,
+    *,
+    cancel_check: Callable[[], None] | None = None,
+    heartbeat_probe: Callable[[], None] | None = None,
+    timeout_ms: int = UPLOAD_TIMEOUT_MS,
+    heartbeat_interval_ms: int = HEARTBEAT_INTERVAL_MS,
+) -> dict[str, Any]:
+    """Czeka na gotowy przycisk publikacji i raportuje postęp/szybkość CDA."""
+    started = time.monotonic()
+    deadline = started + timeout_ms / 1000
+    next_heartbeat = started
+    while True:
+        if cancel_check is not None:
+            cancel_check()
+        status = _read_cda_upload_status(page)
+        if status.get("complete"):
+            logger.info(
+                "cda: przesylanie zakonczone; formularz gotowy "
+                "(postep=%s, marker=%s, przycisk=%s)",
+                status.get("percent"),
+                status.get("complete_marker"),
+                status.get("submit_ready"),
+            )
+            return status
+        now = time.monotonic()
+        if now >= deadline:
+            raise BrowserUploadError(
+                "CDA: przekroczono limit oczekiwania na zakonczenie przesylania",
+                retriable=True,
+            )
+        if now >= next_heartbeat:
+            details = status.get("details") or []
+            logger.info(
+                "cda: przesylanie trwa (%.0f s), postep=%s; panel=%s",
+                now - started,
+                status.get("percent"),
+                " | ".join(str(item) for item in details) or "brak czytelnych danych",
+            )
+            if heartbeat_probe is not None:
+                heartbeat_probe()
+            next_heartbeat = now + heartbeat_interval_ms / 1000
+        time.sleep(min(1.0, max(0.05, deadline - now)))
+
+
+def _cda_result_url(page: object) -> str | None:
+    """Odczytuje link filmu z URL strony albo wyniku wyrenderowanego w DOM."""
+    candidates: list[str] = [str(getattr(page, "url", ""))]
+    locator = getattr(page, "locator")(
+        "a[href*='/video/'], input[value*='/video/'], textarea"
+    )
+    for index in range(min(locator.count(), 30)):
+        item = locator.nth(index)
+        href = item.get_attribute("href")
+        if href:
+            candidates.append(href)
+        try:
+            value = item.input_value()
+        except Exception:
+            value = item.text_content() or ""
+        candidates.extend(re.findall(r"https?://[^\s\"'<>]+", value or ""))
+    base_url = str(getattr(page, "url", ""))
+    if not re.match(r"https?://", base_url):
+        base_url = "https://www.cda.pl/"
+    for candidate in candidates:
+        absolute = urljoin(base_url, candidate.strip())
+        match = re.search(r"https?://(?:www\.)?cda\.pl/video/[A-Za-z0-9_-]+", absolute)
+        if match:
+            return match.group(0)
+    return None
+
+
+def _wait_for_cda_result_url(
+    page: object,
+    *,
+    cancel_check: Callable[[], None] | None = None,
+    heartbeat_probe: Callable[[], None] | None = None,
+    timeout_ms: int = UPLOAD_TIMEOUT_MS,
+) -> str:
+    started = time.monotonic()
+    deadline = started + timeout_ms / 1000
+    next_heartbeat = started + HEARTBEAT_INTERVAL_MS / 1000
+    while True:
+        if cancel_check is not None:
+            cancel_check()
+        url = _cda_result_url(page)
+        if url:
+            logger.info("cda: publikacja potwierdzona, URL filmu: %s", url)
+            return url
+        now = time.monotonic()
+        if now >= deadline:
+            raise BrowserUploadError(
+                "CDA: kliknieto Dodaj do serwisu, ale nie uzyskano linku filmu. "
+                "Sprawdz panel recznie; upload nie bedzie ponawiany.",
+                retriable=False,
+                manual_review_required=True,
+            )
+        if now >= next_heartbeat:
+            logger.info(
+                "cda: oczekuje na potwierdzenie i link filmu (%.0f s)",
+                now - started,
+            )
+            if heartbeat_probe is not None:
+                heartbeat_probe()
+            next_heartbeat = now + HEARTBEAT_INTERVAL_MS / 1000
+        time.sleep(min(1.0, max(0.05, deadline - now)))
 
 
 def _set_checkbox_by_text(page: object, text_fragment: str, checked: bool) -> bool:
@@ -242,28 +434,11 @@ class CDAUploader(BaseUploader):
                 "wysylania i formularz metadanych"
             )
 
-            ready_marker = page.get_by_text(
-                re.compile(
-                    r"Film zosta[łl] przes[łl]any.*oczekuje na publikacj[eę]",
-                    re.IGNORECASE,
-                )
-            ).first
-            wait_for_visible_with_heartbeat(
-                ready_marker,
-                platform="cda",
-                field_name="formularz metadanych",
-                failure_probe=lambda: visible_error_text(
-                    page,
-                    (
-                        "#upload1 .error",
-                        ".qq-upload-fail .qq-upload-status-text",
-                        ".alert-danger",
-                        ".upload-error",
-                    ),
-                ),
+            _wait_for_cda_upload_complete(
+                page,
                 cancel_check=self._raise_if_cancelled,
                 heartbeat_probe=lambda: self._debug_snapshot(
-                    page, "waiting_for_metadata"
+                    page, "upload_progress"
                 ),
             )
             title_input = _find_cda_title_input(page, video_path)
@@ -332,21 +507,13 @@ class CDAUploader(BaseUploader):
                     )
 
             report_manual_captions("cda", srt_path)
-            submit = unique_visible_locator(
-                page,
-                (
-                    "#dodajDoSerwisu",
-                    "button:has-text('Opublikuj w serwisie')",
-                    "input[type='submit'][value*='Opublikuj']",
-                ),
-                "przycisku publikacji",
+            submit = _find_cda_submit_button(page)
+            logger.info(
+                "cda: formularz metadanych wypelniony; klikam Dodaj do serwisu"
             )
-            logger.info("cda: formularz metadanych wypelniony; publikuje nagranie")
             submit.click()
-            url = wait_for_video_url(
+            url = _wait_for_cda_result_url(
                 page,
-                r"cda\.pl/video/",
-                platform="cda",
                 cancel_check=self._raise_if_cancelled,
                 heartbeat_probe=lambda: self._debug_snapshot(
                     page, "waiting_for_publication"

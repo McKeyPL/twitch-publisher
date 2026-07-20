@@ -77,6 +77,11 @@ akceptuja regulamin i oswiadczenie o prawach oraz odpowiadaja `Nie` na pytania o
 przemoc, seks, uzaleznienia, wulgaryzmy i sponsoring. Wartosci mozna zmienic per
 instalacja w `config.yaml`.
 
+Podczas wysylania CDA loguje odczytany procent, predkosc i komunikaty panelu uploadu.
+Po zakonczeniu transferu wypelnia formularz i klika aktualny przycisk `Dodaj do
+serwisu` (obslugiwany jest tez starszy tekst `Opublikuj w serwisie`). Status
+`SUCCESS` trafia do SQLite dopiero po wygenerowaniu i odczytaniu URL filmu CDA.
+
 Rumble wymaga jawnego wyboru licencji w `.env`:
 
 ```dotenv

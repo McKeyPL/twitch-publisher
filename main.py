@@ -233,7 +233,17 @@ def process_ready_recording(
                 logger.error("%s: upload %s nie powiodl sie: %s", platform, video_path, error)
                 continue
 
-            state_store.mark_success(video_path, platform, result.platform_video_id)
+            stored_identifier = (
+                result.platform_url
+                if platform in {"cda", "rumble"} and result.platform_url
+                else result.platform_video_id
+            )
+            state_store.mark_success(video_path, platform, stored_identifier)
+            logger.info(
+                "%s: upload zakonczony sukcesem; zapisano identyfikator/URL: %s",
+                platform,
+                stored_identifier,
+            )
             if result.captions_uploaded:
                 state_store.mark_captions_uploaded(video_path, platform)
 
