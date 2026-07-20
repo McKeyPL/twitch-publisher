@@ -62,7 +62,9 @@ python main.py --config config.yaml --browser-debug
 
 Tryb debug wymusza widoczne okno Firefoksa, loguje bledy konsoli, nieudane
 requesty, odpowiedzi HTTP 4xx/5xx, stan inputu pliku i elementy postepu. Zapisuje
-tez screenshoty oraz trace Playwright w `logs/browser_debug`. Trace mozna otworzyc:
+tez screenshoty. Trace Playwright jest pakowany do `logs/browser_debug` tylko po
+bledzie; po sukcesie lub Ctrl+C jest odrzucany, aby jego kompresja nie blokowala
+zamkniecia przegladarki. Zapisany trace mozna otworzyc:
 
 ```powershell
 playwright show-trace logs\browser_debug\cda_*_trace.zip

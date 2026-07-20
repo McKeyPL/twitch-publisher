@@ -39,14 +39,22 @@ class AuthenticatedBrowserSession:
     playwright: Any
     trace_path: Path | None = None
 
-    def close(self) -> None:
+    def close(self, *, save_trace: bool = False) -> None:
         if self.trace_path is not None:
             try:
-                self.trace_path.parent.mkdir(parents=True, exist_ok=True)
-                self.context.tracing.stop(path=str(self.trace_path))
-                logger.info("Zapisano trace Playwright: %s", self.trace_path)
+                if save_trace:
+                    self.trace_path.parent.mkdir(parents=True, exist_ok=True)
+                    logger.info("Zapisuje trace Playwright po bledzie: %s", self.trace_path)
+                    self.context.tracing.stop(path=str(self.trace_path))
+                    logger.info("Zapisano trace Playwright: %s", self.trace_path)
+                else:
+                    # Pakowanie dlugiego trace po wielogigabajtowym uploadzie potrafi
+                    # blokowac zamkniecie przez wiele minut. Po sukcesie/cancel trace
+                    # jest zbedny; screenshoty i logi pozostaja na dysku.
+                    self.context.tracing.stop()
+                    logger.info("Zakonczono trace Playwright bez zapisu archiwum")
             except Exception:
-                logger.warning("Nie udalo sie zapisac trace Playwright", exc_info=True)
+                logger.warning("Nie udalo sie zakonczyc trace Playwright", exc_info=True)
         for resource in (self.context, self.browser):
             try:
                 resource.close()
@@ -56,12 +64,17 @@ class AuthenticatedBrowserSession:
             self.playwright.stop()
         except Exception:  # pragma: no cover
             logger.debug("Blad zatrzymywania Playwright", exc_info=True)
+        else:
+            logger.info("Zamknieto sesje Playwright")
 
     def __enter__(self) -> "AuthenticatedBrowserSession":
         return self
 
     def __exit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
-        self.close()
+        interrupted = exc_type is not None and issubclass(
+            exc_type, (KeyboardInterrupt, SystemExit)
+        )
+        self.close(save_trace=exc_type is not None and not interrupted)
 
 
 class BrowserSessionManager:
@@ -227,7 +240,11 @@ class BrowserSessionManager:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         trace_path = debug_directory / f"{platform_name}_{timestamp}_trace.zip"
         context.tracing.start(screenshots=True, snapshots=True, sources=True)
-        logger.info("%s: wlaczono trace Playwright -> %s", platform_name, trace_path)
+        logger.info(
+            "%s: wlaczono trace Playwright; archiwum zostanie zapisane tylko po bledzie -> %s",
+            platform_name,
+            trace_path,
+        )
         return trace_path
 
     def _prepare_page(self, page: Any, platform_name: str) -> None:
