@@ -68,6 +68,7 @@ zamkniecia przegladarki. Zapisany trace mozna otworzyc:
 
 ```powershell
 playwright show-trace logs\browser_debug\cda_*_trace.zip
+playwright show-trace logs\browser_debug\rumble_*_trace.zip
 ```
 
 Trace moze zawierac dane sesji i adresy requestow, dlatego nie nalezy go
@@ -103,8 +104,17 @@ RUMBLE_LICENSE_OPTION=6
 Kod nie wybiera tej opcji samodzielnie, poniewaz kazda wartosc przekazuje inny
 zakres praw. Na podstawie formularza z 2026-07-20 uploader ustawia kategorie
 glowna `Gaming`, probuje dopasowac gre jako kategorie dodatkowa i odrzuca pliki
-wieksze niz 15 GB przed otwarciem przegladarki. Sukces jest rozpoznawany przez
-formularz `#form3` i pole `textarea#direct`, a nie przez zmiane URL strony.
+wieksze niz 15 GB (15 000 000 000 bajtow) przed otwarciem przegladarki.
+
+Rumble pokazuje drugi krok licencji, zanim zakonczy wysylanie pliku. Jego
+widocznosc nie oznacza konca transferu. Uploader czeka na niepusty serwerowy token
+w ukrytym polu `#video[]`, ustawiany przez kod strony dopiero po wyslaniu ostatniego
+chunka i scaleniu pliku. Co 30 sekund loguje procent, predkosc i tekst panelu;
+Ctrl+C jest sprawdzane co najwyzej co sekunde. Dopiero po potwierdzeniu transferu
+ustawiana jest licencja, akceptowane sa prawa i regulamin oraz klikany finalny
+`Submit`. Zgody sa weryfikowane rowniez przez pola `#rights` i `#terms` o wartosci
+`1`. Sukces jest rozpoznawany przez formularz `#form3` i pole `textarea#direct`,
+a nie przez zmiane URL strony.
 
 ## Uruchamianie
 

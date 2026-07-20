@@ -21,8 +21,10 @@ from uploaders.base import UploadCancelled
 from uploaders.rumble import (
     RumbleUploader,
     _accept_rumble_confirmation,
+    _read_rumble_transfer_status,
     _rumble_result_url,
     _set_category_by_label,
+    _wait_for_rumble_transfer,
 )
 
 
@@ -154,7 +156,7 @@ def test_rumble_success_url_comes_from_form3_not_page_navigation() -> None:
     assert _rumble_result_url(page) == "https://rumble.com/vabc123-title.html"
 
 
-def test_rumble_hidden_confirmation_is_clicked_through_visible_label() -> None:
+def test_rumble_hidden_confirmation_uses_change_event_and_hidden_value() -> None:
     class Checkbox:
         checked = False
 
@@ -164,33 +166,89 @@ def test_rumble_hidden_confirmation_is_clicked_through_visible_label() -> None:
         def is_checked(self):
             return self.checked
 
-    class Label:
-        def __init__(self, checkbox):
-            self.checkbox = checkbox
+        def evaluate(self, script):
+            assert "new Event('change'" in script
+            self.checked = True
+            hidden.value = "1"
+
+    class Hidden:
+        value = "0"
 
         def count(self):
             return 1
 
-        def is_visible(self):
-            return True
-
-        def click(self):
-            self.checkbox.checked = True
+        def input_value(self):
+            return self.value
 
     checkbox = Checkbox()
-    label = Label(checkbox)
+    hidden = Hidden()
 
     class ConfirmationPage:
         def locator(self, selector):
             if selector == "#crights":
                 return checkbox
-            if selector == "label[for='crights'] > span":
-                return label
+            if selector == "#rights":
+                return hidden
             raise AssertionError(f"Nieoczekiwany selektor: {selector}")
 
     _accept_rumble_confirmation(ConfirmationPage(), "crights")
 
     assert checkbox.checked is True
+    assert hidden.value == "1"
+
+
+def test_rumble_transfer_waits_for_server_token_not_second_form() -> None:
+    class TransferPage:
+        def __init__(self):
+            self.calls = 0
+            self.waits = []
+
+        def evaluate(self, script):
+            assert "video[]" in script
+            self.calls += 1
+            if self.calls < 3:
+                return {
+                    "complete": False,
+                    "failed": False,
+                    "percent": self.calls * 10,
+                    "details": [f"{self.calls * 10}% (3 MB/s)"],
+                    "error": None,
+                }
+            return {
+                "complete": True,
+                "failed": False,
+                "percent": 100,
+                "details": ["100%"],
+                "error": None,
+            }
+
+        def wait_for_timeout(self, milliseconds):
+            self.waits.append(milliseconds)
+
+    page = TransferPage()
+
+    _wait_for_rumble_transfer(page, timeout_ms=10_000)
+
+    assert page.calls == 3
+    assert page.waits == [1000, 1000]
+
+
+def test_rumble_transfer_status_requires_nonempty_video_token() -> None:
+    class StatusPage:
+        def evaluate(self, script):
+            assert "videoToken" in script
+            return {
+                "complete": False,
+                "failed": False,
+                "percent": 100,
+                "details": ["100%"],
+                "error": None,
+            }
+
+    status = _read_rumble_transfer_status(StatusPage())
+
+    assert status["percent"] == 100
+    assert status["complete"] is False
 
 
 def test_cancel_token_stops_before_opening_browser(tmp_path: Path) -> None:

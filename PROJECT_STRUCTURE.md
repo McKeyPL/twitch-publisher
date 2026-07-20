@@ -13,7 +13,7 @@ twitch-publisher/
 |   |-- youtube.py              # OAuth2, resumable upload, SRT, playlisty
 |   |-- browser_form.py         # wspolne operacje formularzy Playwright
 |   |-- cda.py                  # uploader formularza CDA
-|   `-- rumble.py               # uploader formularza Rumble
+|   `-- rumble.py               # 15 GB, chunki, licencja, zgody i URL Rumble
 |-- tests/                      # testy jednostkowe i integracyjne bez sieci
 |-- .env.example
 |-- .gitignore
@@ -43,6 +43,10 @@ twitch-publisher/
 - `state.py` jest jedynym miejscem zapisujacym statusy uploadow i quote SQLite.
 - `main.py` sklada zaleznosci, utrzymuje tracker miedzy cyklami i izoluje wyjatki
   per nagranie oraz per platforma.
+- `uploaders/rumble.py` nie uznaje widocznego drugiego kroku za koniec transferu;
+  czeka na token `#video[]` ustawiany po wyslaniu i scaleniu wszystkich chunkow.
+- Uploadery przegladarkowe zapisuja trace tylko po bledzie, a token anulowania
+  sprawdzaja w czasie dlugich oczekiwan co najwyzej co sekunde.
 - `mover.py` dziala dopiero po terminalnym statusie wszystkich wymaganych platform.
 - `cleanup.py` jest niezalezna, recznie uruchamiana komenda z domyslnym dry-run;
   `main.py` nigdy jej nie wywoluje.

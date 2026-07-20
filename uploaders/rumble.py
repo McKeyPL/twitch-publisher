@@ -15,6 +15,9 @@ from config import BrowserConfig, BrowserPlatformConfig, RetryConfig
 from uploaders.base import BaseUploader, UploadResult
 from uploaders.browser_form import (
     BrowserUploadError,
+    CANCEL_POLL_INTERVAL_MS,
+    HEARTBEAT_INTERVAL_MS,
+    UPLOAD_TIMEOUT_MS,
     capture_browser_debug,
     optional_visible_locator,
     report_manual_captions,
@@ -88,11 +91,12 @@ def _rumble_result_url(page: object) -> str:
 
 
 def _accept_rumble_confirmation(page: object, checkbox_id: str) -> None:
-    """Zaznacza stylowany checkbox Rumble przez jego widoczny element label.
+    """Zaznacza ukryty checkbox i sprawdza pole walidowane przez Rumble.
 
     Natywne inputy ``#crights`` i ``#cterms`` sa ukryte przez CSS. Klikniecie
-    etykiety uruchamia obsluge JavaScript strony, ktora aktualizuje rowniez
-    ukryte pola ``#rights``/``#terms`` uzywane podczas walidacji formularza.
+    tekstu wewnatrz etykiety ``cterms`` moze trafic w link do regulaminu zamiast
+    checkboxa. Wymuszone ``set_checked`` emituje zdarzenie ``change`` obslugiwane
+    przez strone i aktualizuje ``#rights``/``#terms``.
     """
     checkbox = unique_locator(
         page,
@@ -100,25 +104,119 @@ def _accept_rumble_confirmation(page: object, checkbox_id: str) -> None:
         f"potwierdzenia {checkbox_id}",
     )
     if checkbox.is_checked():
-        return
-
-    marker = optional_visible_locator(
-        page,
-        (
-            f"label[for='{checkbox_id}'] > span",
-            f"label[for='{checkbox_id}']",
-        ),
-    )
-    if marker is None:
-        raise BrowserUploadError(
-            f"Rumble: nie znaleziono widocznej kontrolki zgody {checkbox_id}",
-            retriable=False,
+        pass
+    else:
+        checkbox.evaluate(
+            """element => {
+                element.checked = true;
+                element.dispatchEvent(new Event('input', {bubbles: true}));
+                element.dispatchEvent(new Event('change', {bubbles: true}));
+            }"""
         )
-    marker.click()
     if not checkbox.is_checked():
         raise BrowserUploadError(
             f"Rumble: kontrolka zgody {checkbox_id} nie zostala zaznaczona",
             retriable=False,
+        )
+    hidden_id = checkbox_id.removeprefix("c")
+    hidden = unique_locator(
+        page,
+        (f"#{hidden_id}",),
+        f"ukrytego potwierdzenia {hidden_id}",
+    )
+    if hidden.input_value() != "1":
+        raise BrowserUploadError(
+            f"Rumble: zgoda {checkbox_id} nie zaktualizowala pola {hidden_id}",
+            retriable=False,
+        )
+
+
+def _read_rumble_transfer_status(page: object) -> dict[str, object]:
+    """Czyta serwerowy token uploadu i widoczny postep z formularza Rumble."""
+    status = getattr(page, "evaluate")(
+        """() => {
+            const videoToken = (document.getElementById('video[]')?.value || '').trim();
+            const progressTexts = Array.from(
+                document.querySelectorAll('.top_percent, .num_percent')
+            ).map(element => (element.textContent || '').trim()).filter(Boolean);
+            const percentages = progressTexts.flatMap(text =>
+                Array.from(text.matchAll(/(\\d+(?:[.,]\\d+)?)\\s*%/g), match =>
+                    Number.parseFloat(match[1].replace(',', '.'))
+                )
+            ).filter(Number.isFinite);
+            const error = Array.from(document.querySelectorAll(
+                '#error_video, #error_files, #error_files_2, .upload-error'
+            )).find(element => {
+                const style = window.getComputedStyle(element);
+                return style.display !== 'none' && style.visibility !== 'hidden' &&
+                    (element.textContent || '').trim();
+            });
+            return {
+                complete: Boolean(videoToken) && videoToken !== 'ERROR',
+                failed: videoToken === 'ERROR',
+                percent: percentages.length ? Math.max(...percentages) : null,
+                details: [...new Set(progressTexts)],
+                error: error ? (error.textContent || '').trim() : null
+            };
+        }"""
+    )
+    if not isinstance(status, dict):
+        raise BrowserUploadError(
+            "Rumble: nie udalo sie odczytac stanu transferu",
+            retriable=True,
+        )
+    return status
+
+
+def _wait_for_rumble_transfer(
+    page: object,
+    *,
+    cancel_check: Callable[[], None] | None = None,
+    heartbeat_probe: Callable[[], None] | None = None,
+    timeout_ms: int = UPLOAD_TIMEOUT_MS,
+    heartbeat_interval_ms: int = HEARTBEAT_INTERVAL_MS,
+) -> None:
+    """Czeka na token ustawiany przez Rumble po wyslaniu i scaleniu pliku."""
+    started = time.monotonic()
+    deadline = started + timeout_ms / 1000
+    next_heartbeat = started
+    while True:
+        if cancel_check is not None:
+            cancel_check()
+        status = _read_rumble_transfer_status(page)
+        if status.get("failed") or status.get("error"):
+            detail = status.get("error") or "Rumble oznaczyl transfer jako ERROR"
+            raise BrowserUploadError(
+                f"Rumble: transfer pliku nie powiodl sie: {detail}",
+                retriable=True,
+            )
+        if status.get("complete"):
+            logger.info(
+                "rumble: transfer pliku i scalenie chunkow zakonczone (100%%)"
+            )
+            return
+
+        now = time.monotonic()
+        if now >= deadline:
+            raise BrowserUploadError(
+                f"Rumble: przekroczono limit oczekiwania na transfer "
+                f"({timeout_ms / 1000:.0f} s)",
+                retriable=True,
+            )
+        if now >= next_heartbeat:
+            details = "; ".join(str(item) for item in status.get("details", []))
+            logger.info(
+                "rumble: transfer trwa (%.0f s), postep=%s, panel=%s",
+                now - started,
+                status.get("percent") if status.get("percent") is not None else "?",
+                details or "brak danych",
+            )
+            if heartbeat_probe is not None:
+                heartbeat_probe()
+            next_heartbeat = now + heartbeat_interval_ms / 1000
+        remaining_ms = max(1, int((deadline - now) * 1000))
+        getattr(page, "wait_for_timeout")(
+            min(CANCEL_POLL_INTERVAL_MS, remaining_ms)
         )
 
 
@@ -289,6 +387,14 @@ class RumbleUploader(BaseUploader):
                 ),
             )
             self._debug_snapshot(page, "second_step_ready", force=True)
+            _wait_for_rumble_transfer(
+                page,
+                cancel_check=self._raise_if_cancelled,
+                heartbeat_probe=lambda: self._debug_snapshot(
+                    page, "waiting_for_transfer"
+                ),
+            )
+            self._debug_snapshot(page, "transfer_complete", force=True)
             license_option = self.config.license_option or ""
             license_control = unique_visible_locator(
                 page,
