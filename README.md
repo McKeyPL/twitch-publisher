@@ -241,3 +241,33 @@ Retention age is calculated from the MKV modification time.
 .venv/bin/python -m pip install -r requirements-dev.txt
 .venv/bin/python -m pytest -q
 ```
+
+## Manual GitHub releases
+
+The `Manual release` GitHub Actions workflow creates a release only when started
+from the Actions page. It does not run on pushes or on a schedule.
+
+1. Open **Actions** in the GitHub repository.
+2. Select **Manual release**.
+3. Select **Run workflow** and enter a new semantic version tag such as `v1.0.0`.
+4. Optionally choose draft or prerelease mode.
+
+Before creating the release, the workflow runs the test suite, compiles the Python
+sources, and validates both Bash launchers. It then creates a clean source ZIP with
+a SHA-256 checksum. Runtime data, credentials, logs, virtual environments, and
+recordings are excluded because the archive is built only from Git-tracked files.
+
+The release description contains two parts:
+
+- a commit summary generated from commits since the latest published release;
+- GitHub's automatically generated release notes, including categorized pull
+  requests, contributors, and a full changelog link when those data are available.
+
+GitHub Copilot release-note generation is not invoked by the workflow. The stable,
+repository-native GitHub Release Notes API is used instead. Categories can be
+customized in `.github/release.yml` by changing label mappings.
+
+The workflow needs the repository's default `GITHUB_TOKEN` with `contents: write`.
+If repository settings restrict this token to read-only access, enable read and
+write workflow permissions under **Settings > Actions > General > Workflow
+permissions**.

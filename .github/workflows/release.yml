@@ -1,0 +1,154 @@
+name: Manual release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag in semantic version format, for example v1.0.0
+        required: true
+        type: string
+      prerelease:
+        description: Mark the release as a prerelease
+        required: true
+        default: false
+        type: boolean
+      draft:
+        description: Create a draft instead of publishing immediately
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  test-build-release:
+    name: Test, package, and release
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out the requested revision
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate release tag
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid tag '$RELEASE_TAG'. Expected a value such as v1.2.3 or v1.2.3-rc.1." >&2
+            exit 1
+          fi
+
+          if git rev-parse --verify --quiet "refs/tags/$RELEASE_TAG" >/dev/null; then
+            echo "Tag '$RELEASE_TAG' already exists." >&2
+            exit 1
+          fi
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-dev.txt
+
+      - name: Run tests
+        run: python -m pytest -q
+
+      - name: Compile Python sources
+        run: python -m compileall -q .
+
+      - name: Validate shell launchers
+        run: |
+          bash -n install.sh
+          bash -n start.sh
+
+      - name: Build source archive and checksum
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          package_name="twitch-publisher-${RELEASE_TAG}"
+          mkdir -p dist
+          git archive \
+            --format=zip \
+            --prefix="${package_name}/" \
+            --output="dist/${package_name}.zip" \
+            HEAD
+          cd dist
+          sha256sum "${package_name}.zip" > SHA256SUMS.txt
+
+      - name: Generate commit summary
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          previous_tag="$(gh release list \
+            --limit 1 \
+            --exclude-drafts \
+            --json tagName \
+            --jq '.[0].tagName // empty')"
+
+          {
+            echo "## Commit summary"
+            echo
+            if [[ -n "$previous_tag" ]]; then
+              echo "Changes since \`$previous_tag\`:"
+              echo
+              git log --reverse --pretty='- `%h` %s (%an)' "${previous_tag}..HEAD"
+            else
+              echo "Changes included in the first release:"
+              echo
+              git log --reverse --pretty='- `%h` %s (%an)' HEAD
+            fi
+          } > dist/RELEASE_SUMMARY.md
+
+          if [[ ! -s dist/RELEASE_SUMMARY.md ]]; then
+            echo "Could not generate release summary." >&2
+            exit 1
+          fi
+
+      - name: Create GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          CREATE_DRAFT: ${{ inputs.draft }}
+          CREATE_PRERELEASE: ${{ inputs.prerelease }}
+        run: |
+          package="dist/twitch-publisher-${RELEASE_TAG}.zip"
+          notes="$(cat dist/RELEASE_SUMMARY.md)"
+          arguments=(
+            "$RELEASE_TAG"
+            "$package#Twitch Publisher ${RELEASE_TAG}"
+            "dist/SHA256SUMS.txt#SHA-256 checksums"
+            --target "$GITHUB_SHA"
+            --title "Twitch Publisher ${RELEASE_TAG}"
+            --generate-notes
+            --notes "$notes"
+            --fail-on-no-commits
+          )
+
+          if [[ "$CREATE_DRAFT" == "true" ]]; then
+            arguments+=(--draft)
+          fi
+          if [[ "$CREATE_PRERELEASE" == "true" ]]; then
+            arguments+=(--prerelease)
+          fi
+
+          gh release create "${arguments[@]}"

@@ -2,6 +2,10 @@
 
 ```text
 twitch-publisher/
+|-- .github/
+|   |-- release.yml             # generated release-note categories
+|   `-- workflows/
+|       `-- release.yml         # manual tested release and source ZIP
 |-- auth/
 |   |-- __init__.py
 |   `-- browser_session.py      # storage state -> Firefox -> manual login
@@ -58,3 +62,5 @@ twitch-publisher/
   non-zero unexpected process exit.
 - `install.sh` installs system and Python dependencies but never enables a
   scheduler or background service.
+- `.github/workflows/release.yml` runs only on manual dispatch, validates the
+  project, packages tracked sources, and publishes a release with generated notes.
