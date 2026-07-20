@@ -10,6 +10,7 @@ from config import BrowserConfig, BrowserPlatformConfig, RetryConfig
 from uploaders.cda import (
     CDAUploader,
     _cda_result_url,
+    _clear_cda_stale_uploads,
     _find_cda_title_input,
     _find_cda_submit_button,
     _read_cda_upload_status,
@@ -205,6 +206,61 @@ def test_cda_upload_status_accepts_ready_add_button() -> None:
     assert status["percent"] == 100
 
 
+def test_cda_duplicate_status_carries_existing_url() -> None:
+    class StatusPage:
+        def evaluate(self, script):
+            assert "duplikatem" in script
+            return {
+                "complete": True,
+                "complete_marker": False,
+                "submit_ready": False,
+                "duplicate_url": "https://www.cda.pl/video/3122407840",
+                "percent": None,
+                "details": [],
+            }
+
+    status = _read_cda_upload_status(StatusPage())
+
+    assert status["duplicate_url"] == "https://www.cda.pl/video/3122407840"
+
+
+def test_cda_stale_upload_cards_are_removed_before_new_file() -> None:
+    class RemoveButton:
+        def __init__(self, page) -> None:
+            self.page = page
+
+        def get_attribute(self, name):
+            return "Usuń z listy." if name == "title" else None
+
+        def evaluate(self, script):
+            assert script == "element => element.click()"
+            self.page.count -= 1
+
+    class RemoveList:
+        def __init__(self, page) -> None:
+            self.page = page
+
+        def count(self):
+            return self.page.count
+
+        @property
+        def first(self):
+            return RemoveButton(self.page)
+
+    class RemovePage:
+        def __init__(self) -> None:
+            self.count = 2
+
+        def locator(self, selector):
+            assert "icon-remove-sign" in selector
+            return RemoveList(self)
+
+    page = RemovePage()
+
+    assert _clear_cda_stale_uploads(page) == 2
+    assert page.count == 0
+
+
 def test_cda_current_add_to_service_button_is_supported() -> None:
     expected_selector = "button[type='button'][data-loading-text*='Dodaj do serwisu']"
     button = FakeLocator()
@@ -223,7 +279,7 @@ def test_cda_result_url_is_read_from_generated_dom_link() -> None:
         url = "https://www.cda.pl/uploader_video"
 
         def locator(self, selector):
-            assert "a[href*='/video/']" in selector
+            assert ".icon-file.icon-success" in selector
             return FakeLocator(href="/video/abc123")
 
     assert _cda_result_url(ResultPage()) == "https://www.cda.pl/video/abc123"

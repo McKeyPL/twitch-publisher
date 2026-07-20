@@ -83,6 +83,14 @@ Podczas wysylania CDA loguje odczytany procent, predkosc i komunikaty panelu upl
 Po zakonczeniu transferu wypelnia formularz i klika aktualny przycisk `Dodaj do
 serwisu` (obslugiwany jest tez starszy tekst `Opublikuj w serwisie`). Status
 `SUCCESS` trafia do SQLite dopiero po wygenerowaniu i odczytaniu URL filmu CDA.
+Przed wskazaniem kolejnego pliku uploader klika `Usuń z listy` przy pozostawionych
+kartach poprzednich uploadów. Jeśli CDA rozpozna plik jako duplikat, program
+odczytuje podany istniejący URL, usuwa kartę błędu i zapisuje ten URL jako
+`SUCCESS`, zamiast oczekiwać bez końca lub ponownie publikować materiał.
+Prawidlowe zakończenie jest rozpoznawane po ikonie `.icon-file.icon-success`, a URL
+jest pobierany wyłącznie z linku w tej samej karcie wyniku `.col-md-19`. Linki z
+powiadomień w nagłówku strony są ignorowane. Po odczytaniu URL karta jest usuwana
+z listy, przygotowując formularz do następnego nagrania.
 
 Rumble wymaga jawnego wyboru licencji w `.env`:
 

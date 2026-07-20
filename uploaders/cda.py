@@ -39,6 +39,52 @@ CDA_FORM_DEFAULTS = {
     "contains_profanity": False,
     "contains_sponsorship": False,
 }
+CDA_STALE_REMOVE_SELECTOR = (
+    "#uploader .videoContainer .fileListContainer "
+    ".panel-heading-actions .icon-remove-sign"
+)
+
+
+def _clear_cda_stale_uploads(
+    page: object,
+    *,
+    cancel_check: Callable[[], None] | None = None,
+    timeout_seconds: float = 10.0,
+) -> int:
+    """Usuwa zakończone/błędne karty z listy uploadu przed wyborem pliku."""
+    removed = 0
+    while True:
+        if cancel_check is not None:
+            cancel_check()
+        buttons = getattr(page, "locator")(CDA_STALE_REMOVE_SELECTOR)
+        before = buttons.count()
+        if before == 0:
+            if removed:
+                logger.info("cda: usunieto %d starych pozycji z listy uploadu", removed)
+            return removed
+        button = buttons.first
+        title = button.get_attribute("title") or "Usuń z listy"
+        logger.info(
+            "cda: usuwam stara pozycje z listy uploadu (%s), pozostalo=%d",
+            title,
+            before,
+        )
+        # Stara karta bywa zwinięta i ikona nie ma wtedy pola w viewport. Handler
+        # krzyżyka nadal istnieje w DOM; selektor jest ściśle ograniczony do listy
+        # uploadów, dlatego wywołujemy natywne click() bez scrollowania strony.
+        button.evaluate("element => element.click()")
+        deadline = time.monotonic() + timeout_seconds
+        while getattr(page, "locator")(CDA_STALE_REMOVE_SELECTOR).count() >= before:
+            if cancel_check is not None:
+                cancel_check()
+            if time.monotonic() >= deadline:
+                raise BrowserUploadError(
+                    "CDA: kliknieto krzyzyk starego uploadu, ale pozycja nie "
+                    "zniknela z listy",
+                    retriable=True,
+                )
+            time.sleep(0.2)
+        removed += 1
 
 
 def _find_cda_submit_button(page: object) -> object:
@@ -113,10 +159,25 @@ def _read_cda_upload_status(page: object) -> dict[str, Any]:
             const completeMarker = normalizedBody.includes(
                 'film zostal przeslany i oczekuje na publikacje'
             );
+            const duplicateMatch = bodyText.match(
+                /przes[lł]any film jest duplikatem[\s\S]{0,600}?(https?:\/\/(?:www\.)?cda\.pl\/video\/[A-Za-z0-9_-]+)/i
+            );
+            const successIcon = document.querySelector(
+                '#uploader .fileListContainer .icon-file.icon-success'
+            );
+            const successContainer = successIcon
+                ? (successIcon.closest('.col-md-19') || successIcon.parentElement)
+                : null;
+            const successLink = successContainer
+                ? successContainer.querySelector('a[href*="/video/"]')
+                : null;
             return {
-                complete: completeMarker || Boolean(submit && !submit.disabled),
+                complete: completeMarker || Boolean(submit && !submit.disabled)
+                    || Boolean(duplicateMatch) || Boolean(successLink),
                 complete_marker: completeMarker,
                 submit_ready: Boolean(submit && !submit.disabled),
+                duplicate_url: duplicateMatch ? duplicateMatch[1] : null,
+                success_url: successLink ? successLink.href : null,
                 percent,
                 details,
             };
@@ -141,6 +202,18 @@ def _wait_for_cda_upload_complete(
         if cancel_check is not None:
             cancel_check()
         status = _read_cda_upload_status(page)
+        if status.get("success_url"):
+            logger.info(
+                "cda: wykryto icon-file icon-success; URL filmu: %s",
+                status["success_url"],
+            )
+            return status
+        if status.get("duplicate_url"):
+            logger.warning(
+                "cda: serwis rozpoznal duplikat; wykorzystuje istniejacy URL: %s",
+                status["duplicate_url"],
+            )
+            return status
         if status.get("complete"):
             logger.info(
                 "cda: przesylanie zakonczone; formularz gotowy "
@@ -173,8 +246,11 @@ def _wait_for_cda_upload_complete(
 def _cda_result_url(page: object) -> str | None:
     """Odczytuje link filmu z URL strony albo wyniku wyrenderowanego w DOM."""
     candidates: list[str] = [str(getattr(page, "url", ""))]
+    # Nie skanujemy całej strony: nagłówek CDA zawiera linki /video/ z
+    # powiadomień, które nie są wynikiem bieżącego uploadu.
     locator = getattr(page, "locator")(
-        "a[href*='/video/'], input[value*='/video/'], textarea"
+        "#uploader .fileListContainer "
+        ".col-md-19:has(.icon-file.icon-success) a[href*='/video/']"
     )
     for index in range(min(locator.count(), 30)):
         item = locator.nth(index)
@@ -410,6 +486,10 @@ class CDAUploader(BaseUploader):
             page = session.page
             self._raise_if_cancelled()
             self._debug_snapshot(page, "session_ready", force=True)
+            _clear_cda_stale_uploads(
+                page,
+                cancel_check=self._raise_if_cancelled,
+            )
             size_gib = video_path.stat().st_size / (1024 ** 3)
             logger.info(
                 "cda: sesja gotowa (%s); wskazuje plik %.2f GiB: %s",
@@ -434,13 +514,42 @@ class CDAUploader(BaseUploader):
                 "wysylania i formularz metadanych"
             )
 
-            _wait_for_cda_upload_complete(
+            upload_status = _wait_for_cda_upload_complete(
                 page,
                 cancel_check=self._raise_if_cancelled,
                 heartbeat_probe=lambda: self._debug_snapshot(
                     page, "upload_progress"
                 ),
             )
+            duplicate_url = upload_status.get("duplicate_url")
+            success_url = upload_status.get("success_url")
+            if success_url:
+                _clear_cda_stale_uploads(
+                    page,
+                    cancel_check=self._raise_if_cancelled,
+                )
+                logger.info("cda: upload zakonczony, URL filmu: %s", success_url)
+                return UploadResult(
+                    success=True,
+                    platform_video_id=video_id_from_url(str(success_url)),
+                    platform_url=str(success_url),
+                    captions_uploaded=False,
+                )
+            if duplicate_url:
+                _clear_cda_stale_uploads(
+                    page,
+                    cancel_check=self._raise_if_cancelled,
+                )
+                logger.info(
+                    "cda: istniejacy film potwierdzony jako sukces: %s",
+                    duplicate_url,
+                )
+                return UploadResult(
+                    success=True,
+                    platform_video_id=video_id_from_url(str(duplicate_url)),
+                    platform_url=str(duplicate_url),
+                    captions_uploaded=False,
+                )
             title_input = _find_cda_title_input(page, video_path)
             title_input.fill(title)
             unique_visible_locator(
@@ -518,6 +627,10 @@ class CDAUploader(BaseUploader):
                 heartbeat_probe=lambda: self._debug_snapshot(
                     page, "waiting_for_publication"
                 ),
+            )
+            _clear_cda_stale_uploads(
+                page,
+                cancel_check=self._raise_if_cancelled,
             )
             return UploadResult(
                 success=True,
