@@ -275,12 +275,17 @@ def test_cda_current_add_to_service_button_is_supported() -> None:
 
 
 def test_cda_result_url_is_read_from_generated_dom_link() -> None:
+    class ResultLink(FakeLocator):
+        def input_value(self):
+            raise AssertionError("input_value nie moze byc wywolane dla elementu <a>")
+
     class ResultPage:
         url = "https://www.cda.pl/uploader_video"
 
         def locator(self, selector):
             assert ".icon-file.icon-success" in selector
-            return FakeLocator(href="/video/abc123")
+            assert ".panel:has" in selector
+            return ResultLink(href="/video/abc123")
 
     assert _cda_result_url(ResultPage()) == "https://www.cda.pl/video/abc123"
 

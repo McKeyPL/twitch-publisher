@@ -166,7 +166,8 @@ def _read_cda_upload_status(page: object) -> dict[str, Any]:
                 '#uploader .fileListContainer .icon-file.icon-success'
             );
             const successContainer = successIcon
-                ? (successIcon.closest('.col-md-19') || successIcon.parentElement)
+                ? (successIcon.closest('.panel') || successIcon.closest('.col-md-19')
+                    || successIcon.parentElement)
                 : null;
             const successLink = successContainer
                 ? successContainer.querySelector('a[href*="/video/"]')
@@ -250,18 +251,13 @@ def _cda_result_url(page: object) -> str | None:
     # powiadomień, które nie są wynikiem bieżącego uploadu.
     locator = getattr(page, "locator")(
         "#uploader .fileListContainer "
-        ".col-md-19:has(.icon-file.icon-success) a[href*='/video/']"
+        ".panel:has(.icon-file.icon-success) a[href*='/video/']"
     )
     for index in range(min(locator.count(), 30)):
         item = locator.nth(index)
         href = item.get_attribute("href")
         if href:
             candidates.append(href)
-        try:
-            value = item.input_value()
-        except Exception:
-            value = item.text_content() or ""
-        candidates.extend(re.findall(r"https?://[^\s\"'<>]+", value or ""))
     base_url = str(getattr(page, "url", ""))
     if not re.match(r"https?://", base_url):
         base_url = "https://www.cda.pl/"
