@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import threading
 from datetime import datetime, time as datetime_time, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -90,8 +91,10 @@ class YouTubeUploader(BaseUploader):
         config: YouTubeConfig,
         retry_config: RetryConfig,
         state_store: StateStore,
+        *,
+        cancel_event: threading.Event | None = None,
     ) -> None:
-        super().__init__(retry_config)
+        super().__init__(retry_config, cancel_event)
         self.config = config
         self.state_store = state_store
         self._service: Any | None = None
@@ -264,6 +267,7 @@ class YouTubeUploader(BaseUploader):
             )
             response: dict[str, Any] | None = None
             while response is None:
+                self._raise_if_cancelled()
                 _, response = self._with_retry(
                     request.next_chunk,
                     operation_name=f"wysylanie fragmentu {video.name}",

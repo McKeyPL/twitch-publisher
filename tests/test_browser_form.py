@@ -33,8 +33,14 @@ class PageReadyAfterOneHeartbeat:
             raise browser_form.PlaywrightTimeoutError("jeszcze trwa")
 
 
-def test_visible_wait_logs_heartbeat_and_then_returns(caplog) -> None:
+def test_visible_wait_logs_heartbeat_and_then_returns(caplog, monkeypatch) -> None:
     locator = LocatorReadyAfterOneHeartbeat()
+    clock = [0.0]
+    monkeypatch.setattr(
+        browser_form,
+        "time",
+        type("Clock", (), {"monotonic": staticmethod(lambda: clock.__setitem__(0, clock[0] + 0.01) or clock[0])}),
+    )
 
     with caplog.at_level(logging.INFO):
         browser_form.wait_for_visible_with_heartbeat(
@@ -53,6 +59,12 @@ def test_visible_wait_logs_heartbeat_and_then_returns(caplog) -> None:
 def test_video_url_wait_logs_heartbeat_and_returns_url(caplog, monkeypatch) -> None:
     page = PageReadyAfterOneHeartbeat()
     monkeypatch.setattr(browser_form, "HEARTBEAT_INTERVAL_MS", 1)
+    clock = [0.0]
+    monkeypatch.setattr(
+        browser_form,
+        "time",
+        type("Clock", (), {"monotonic": staticmethod(lambda: clock.__setitem__(0, clock[0] + 0.01) or clock[0])}),
+    )
 
     with caplog.at_level(logging.INFO):
         result = browser_form.wait_for_video_url(page, r"cda\.pl/video/")
@@ -90,3 +102,16 @@ def test_regular_browser_failure_remains_retriable() -> None:
 def test_explicit_non_retriable_upload_error_is_respected() -> None:
     error = browser_form.BrowserUploadError("wynik nieznany", retriable=False)
     assert browser_form.should_retry_browser_error(error) is False
+
+
+def test_wait_checks_cancellation_before_playwright_call() -> None:
+    def cancel() -> None:
+        raise KeyboardInterrupt("stop")
+
+    with pytest.raises(KeyboardInterrupt, match="stop"):
+        browser_form.wait_for_visible_with_heartbeat(
+            object(),
+            platform="cda",
+            field_name="formularz",
+            cancel_check=cancel,
+        )

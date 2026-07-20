@@ -182,7 +182,7 @@ def test_sigint_interrupts_active_operation_immediately() -> None:
     with pytest.raises(KeyboardInterrupt):
         _request_stop(event, signal.SIGINT, None)
 
-    assert event.is_set() is False
+    assert event.is_set() is True
 
 
 def test_unknown_browser_outcome_is_not_retried_next_cycle(tmp_path: Path, monkeypatch) -> None:

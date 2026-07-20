@@ -125,6 +125,9 @@ class BrowserConfig:
     firefox_profile_path: Path | None
     headless: bool
     interactive_login_headless: bool
+    debug: bool = False
+    debug_directory: Path = Path("logs/browser_debug")
+    debug_screenshot_interval_seconds: float = 300.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -446,6 +449,15 @@ def config_from_dict(raw: Mapping[str, Any]) -> Config:
             interactive_login_headless=_boolean(
                 _required(browser, "interactive_login_headless", "browser"),
                 "browser.interactive_login_headless",
+            ),
+            debug=_boolean(browser.get("debug", False), "browser.debug"),
+            debug_directory=_path(
+                browser.get("debug_directory", "logs/browser_debug"),
+                "browser.debug_directory",
+            ),
+            debug_screenshot_interval_seconds=_positive_float(
+                browser.get("debug_screenshot_interval_seconds", 300),
+                "browser.debug_screenshot_interval_seconds",
             ),
         ),
         metadata=MetadataConfig(

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import threading
+import time
 from pathlib import Path
 from typing import Callable
 
@@ -11,6 +13,7 @@ from config import BrowserConfig, BrowserPlatformConfig, RetryConfig
 from uploaders.base import BaseUploader, UploadResult
 from uploaders.browser_form import (
     BrowserUploadError,
+    capture_browser_debug,
     optional_visible_locator,
     report_manual_captions,
     should_retry_browser_error,
@@ -34,12 +37,32 @@ class CDAUploader(BaseUploader):
         browser_config: BrowserConfig,
         retry_config: RetryConfig,
         *,
+        cancel_event: threading.Event | None = None,
         session_factory: Callable[[BrowserConfig], BrowserSessionManager] = BrowserSessionManager,
     ) -> None:
-        super().__init__(retry_config)
+        super().__init__(retry_config, cancel_event)
         self.config = config
         self.browser_config = browser_config
         self._session_manager = session_factory(browser_config)
+        self._last_debug_screenshot = 0.0
+
+    def _debug_snapshot(self, page: object, stage: str, *, force: bool = False) -> None:
+        if not self.browser_config.debug:
+            return
+        now = time.monotonic()
+        take_screenshot = force or (
+            now - self._last_debug_screenshot
+            >= self.browser_config.debug_screenshot_interval_seconds
+        )
+        capture_browser_debug(
+            page,
+            platform="cda",
+            debug_directory=self.browser_config.debug_directory,
+            stage=stage,
+            take_screenshot=take_screenshot,
+        )
+        if take_screenshot:
+            self._last_debug_screenshot = now
 
     @property
     def platform_name(self) -> str:
@@ -86,6 +109,8 @@ class CDAUploader(BaseUploader):
     ) -> UploadResult:
         with self._session_manager.open("cda", self.config, self._is_authenticated) as session:
             page = session.page
+            self._raise_if_cancelled()
+            self._debug_snapshot(page, "session_ready", force=True)
             size_gib = video_path.stat().st_size / (1024 ** 3)
             logger.info(
                 "cda: sesja gotowa (%s); wskazuje plik %.2f GiB: %s",
@@ -103,6 +128,8 @@ class CDAUploader(BaseUploader):
                 "pliku wideo",
             )
             file_input.set_input_files(str(video_path), timeout=60_000)
+            self._raise_if_cancelled()
+            self._debug_snapshot(page, "file_selected", force=True)
             logger.info(
                 "cda: plik przekazany formularzowi; oczekuje na zakonczenie "
                 "wysylania i formularz metadanych"
@@ -121,6 +148,10 @@ class CDAUploader(BaseUploader):
                         ".alert-danger",
                         ".upload-error",
                     ),
+                ),
+                cancel_check=self._raise_if_cancelled,
+                heartbeat_probe=lambda: self._debug_snapshot(
+                    page, "waiting_for_metadata"
                 ),
             )
             title_input.fill(title)
@@ -157,7 +188,15 @@ class CDAUploader(BaseUploader):
             submit = unique_visible_locator(page, ("#dodajDoSerwisu",), "przycisku publikacji")
             logger.info("cda: formularz metadanych wypelniony; publikuje nagranie")
             submit.click()
-            url = wait_for_video_url(page, r"cda\.pl/video/")
+            url = wait_for_video_url(
+                page,
+                r"cda\.pl/video/",
+                platform="cda",
+                cancel_check=self._raise_if_cancelled,
+                heartbeat_probe=lambda: self._debug_snapshot(
+                    page, "waiting_for_publication"
+                ),
+            )
             return UploadResult(
                 success=True,
                 platform_video_id=video_id_from_url(url),

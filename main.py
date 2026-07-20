@@ -7,6 +7,7 @@ import logging
 import signal
 import sys
 import threading
+from dataclasses import replace
 from pathlib import Path
 from typing import Callable, Mapping, Sequence
 
@@ -41,6 +42,7 @@ def _request_stop(
 ) -> None:
     """SIGINT przerywa aktywna operacje; SIGTERM konczy po biezacym kroku."""
     if signum == getattr(signal, "SIGINT", None):
+        stop_event.set()
         logger.info("Otrzymano SIGINT; przerywam aktywna operacje")
         raise KeyboardInterrupt
     logger.info("Otrzymano sygnal %s; koncze po biezacym kroku", signum)
@@ -83,19 +85,32 @@ def configure_logging(config: Config) -> None:
     root.addHandler(file_handler)
 
 
-def build_uploaders(config: Config, state_store: StateStore) -> dict[str, BaseUploader]:
+def build_uploaders(
+    config: Config,
+    state_store: StateStore,
+    cancel_event: threading.Event | None = None,
+) -> dict[str, BaseUploader]:
     uploaders: dict[str, BaseUploader] = {}
     if config.platforms.youtube.enabled:
         uploaders["youtube"] = YouTubeUploader(
-            config.platforms.youtube, config.retry, state_store
+            config.platforms.youtube,
+            config.retry,
+            state_store,
+            cancel_event=cancel_event,
         )
     if config.platforms.cda.enabled:
         uploaders["cda"] = CDAUploader(
-            config.platforms.cda, config.browser, config.retry
+            config.platforms.cda,
+            config.browser,
+            config.retry,
+            cancel_event=cancel_event,
         )
     if config.platforms.rumble.enabled:
         uploaders["rumble"] = RumbleUploader(
-            config.platforms.rumble, config.browser, config.retry
+            config.platforms.rumble,
+            config.browser,
+            config.retry,
+            cancel_event=cancel_event,
         )
     return uploaders
 
@@ -299,7 +314,7 @@ def run(config: Config, *, once: bool = False) -> int:
             )
 
     with StateStore(config.paths.database) as store:
-        uploaders = build_uploaders(config, store)
+        uploaders = build_uploaders(config, store, stop_event)
         tracker = FileSizeStabilityTracker(config.watcher.size_stability_seconds)
         try:
             while not stop_event.is_set():
@@ -321,12 +336,23 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, default=Path("config.yaml"))
     parser.add_argument("--once", action="store_true")
+    parser.add_argument(
+        "--browser-debug",
+        action="store_true",
+        help="Pokaz okno Playwright i zapisz trace/screenshoty diagnostyczne",
+    )
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    return run(load_config(args.config), once=args.once)
+    config = load_config(args.config)
+    if args.browser_debug:
+        config = replace(
+            config,
+            browser=replace(config.browser, debug=True, headless=False),
+        )
+    return run(config, once=args.once)
 
 
 if __name__ == "__main__":  # pragma: no cover

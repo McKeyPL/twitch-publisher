@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
+import time
 from pathlib import Path
 from typing import Callable
 from urllib.parse import urljoin
@@ -13,6 +15,7 @@ from config import BrowserConfig, BrowserPlatformConfig, RetryConfig
 from uploaders.base import BaseUploader, UploadResult
 from uploaders.browser_form import (
     BrowserUploadError,
+    capture_browser_debug,
     optional_visible_locator,
     report_manual_captions,
     should_retry_browser_error,
@@ -90,12 +93,32 @@ class RumbleUploader(BaseUploader):
         browser_config: BrowserConfig,
         retry_config: RetryConfig,
         *,
+        cancel_event: threading.Event | None = None,
         session_factory: Callable[[BrowserConfig], BrowserSessionManager] = BrowserSessionManager,
     ) -> None:
-        super().__init__(retry_config)
+        super().__init__(retry_config, cancel_event)
         self.config = config
         self.browser_config = browser_config
         self._session_manager = session_factory(browser_config)
+        self._last_debug_screenshot = 0.0
+
+    def _debug_snapshot(self, page: object, stage: str, *, force: bool = False) -> None:
+        if not self.browser_config.debug:
+            return
+        now = time.monotonic()
+        take_screenshot = force or (
+            now - self._last_debug_screenshot
+            >= self.browser_config.debug_screenshot_interval_seconds
+        )
+        capture_browser_debug(
+            page,
+            platform="rumble",
+            debug_directory=self.browser_config.debug_directory,
+            stage=stage,
+            take_screenshot=take_screenshot,
+        )
+        if take_screenshot:
+            self._last_debug_screenshot = now
 
     @property
     def platform_name(self) -> str:
@@ -161,6 +184,8 @@ class RumbleUploader(BaseUploader):
             "rumble", self.config, self._is_authenticated
         ) as session:
             page = session.page
+            self._raise_if_cancelled()
+            self._debug_snapshot(page, "session_ready", force=True)
             logger.info(
                 "rumble: sesja gotowa (%s); wskazuje plik %.2f GiB: %s",
                 page.url,
@@ -170,6 +195,8 @@ class RumbleUploader(BaseUploader):
             unique_visible_locator(page, ("#Filedata",), "pliku wideo").set_input_files(
                 str(video_path), timeout=60_000
             )
+            self._raise_if_cancelled()
+            self._debug_snapshot(page, "file_selected", force=True)
             unique_visible_locator(page, ("#title",), "tytulu").fill(title)
             unique_visible_locator(page, ("#description",), "opisu").fill(description)
             tags_input = optional_visible_locator(page, ("#tags",))
@@ -220,6 +247,10 @@ class RumbleUploader(BaseUploader):
                         ".upload-error",
                     ),
                 ),
+                cancel_check=self._raise_if_cancelled,
+                heartbeat_probe=lambda: self._debug_snapshot(
+                    page, "waiting_for_second_step"
+                ),
             )
             license_option = self.config.license_option or ""
             license_control = unique_visible_locator(
@@ -254,6 +285,10 @@ class RumbleUploader(BaseUploader):
                             "#error_unknown",
                             "#error_unknown_2",
                         ),
+                    ),
+                    cancel_check=self._raise_if_cancelled,
+                    heartbeat_probe=lambda: self._debug_snapshot(
+                        page, "waiting_for_publication"
                     ),
                 )
             except BrowserUploadError as exc:

@@ -2,9 +2,13 @@ from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
+from threading import Event
+
+import pytest
 
 from config import BrowserConfig, BrowserPlatformConfig, RetryConfig
 from uploaders.cda import CDAUploader
+from uploaders.base import UploadCancelled
 from uploaders.rumble import RumbleUploader, _rumble_result_url, _set_category_by_label
 
 
@@ -124,3 +128,20 @@ def test_rumble_success_url_comes_from_form3_not_page_navigation() -> None:
     )
 
     assert _rumble_result_url(page) == "https://rumble.com/vabc123-title.html"
+
+
+def test_cancel_token_stops_before_opening_browser(tmp_path: Path) -> None:
+    video = tmp_path / "video.mkv"
+    video.write_bytes(b"video")
+    cancel_event = Event()
+    cancel_event.set()
+    uploader = CDAUploader(
+        platform(tmp_path, "cda"),
+        browser(),
+        retry(),
+        cancel_event=cancel_event,
+    )
+    uploader._session_manager = object()
+
+    with pytest.raises(UploadCancelled):
+        uploader.upload(video, "Tytul", "Opis", [])

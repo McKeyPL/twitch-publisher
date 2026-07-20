@@ -51,9 +51,25 @@ aktualizacji selektorow po zmianach stron.
 
 Przy duzym pliku CDA moze przez dluzszy czas wysylac lub przetwarzac nagranie,
 zanim pokaze formularz metadanych. Uploader zapisuje wtedy heartbeat co 30 sekund.
-Brak heartbeat oznacza problem z procesem lub przegladarka; komunikat heartbeat
-oznacza, ze Playwright nadal aktywnie czeka. Do diagnostyki mozna tymczasowo ustawic
-`browser.headless: false` i obserwowac okno przegladarki.
+Heartbeat oznacza jedynie, ze Playwright nadal czeka; nie potwierdza przeplywu
+danych. Do diagnostyki uruchom:
+
+```powershell
+.\start.ps1 -BrowserDebug
+# albo bez launchera:
+python main.py --config config.yaml --browser-debug
+```
+
+Tryb debug wymusza widoczne okno Firefoksa, loguje bledy konsoli, nieudane
+requesty, odpowiedzi HTTP 4xx/5xx, stan inputu pliku i elementy postepu. Zapisuje
+tez screenshoty oraz trace Playwright w `logs/browser_debug`. Trace mozna otworzyc:
+
+```powershell
+playwright show-trace logs\browser_debug\cda_*_trace.zip
+```
+
+Trace moze zawierac dane sesji i adresy requestow, dlatego nie nalezy go
+publikowac ani dodawac do Git.
 
 Rumble wymaga jawnego wyboru licencji w `.env`:
 
@@ -90,7 +106,8 @@ Watcher utrzymuje jeden nieblokujacy tracker stabilnosci rozmiaru MKV przez caly
 czas procesu. Plik bez `_meta.txt`, bez pola `Ended` albo ze zmieniajacym sie
 rozmiarem nie jest wysylany. Wyjatek jednego pliku lub platformy nie zatrzymuje
 pozostalych. Stan `SUCCESS`/`SKIPPED` w SQLite zapobiega duplikacji po restarcie.
-Ctrl+C przerywa aktywna operacje bez wykonywania kolejnych prob. Jesli serwis
+Ctrl+C ustawia token anulowania sprawdzany co najwyzej co sekunde i przerywa
+aktywna operacje bez wykonywania kolejnych prob. Jesli serwis
 przyjal formularz, ale nie da sie potwierdzic wyniku, status otrzymuje znacznik
 `[NO_AUTO_RETRY]`; nagranie wymaga wtedy sprawdzenia w panelu platformy i nie jest
 ponawiane automatycznie.

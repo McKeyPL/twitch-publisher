@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -16,6 +17,10 @@ logger = logging.getLogger(__name__)
 T = TypeVar("T")
 
 
+class UploadCancelled(KeyboardInterrupt):
+    """Kontrolowane przerwanie aktywnego uploadu przez operatora."""
+
+
 @dataclass(frozen=True, slots=True)
 class UploadResult:
     success: bool
@@ -27,8 +32,17 @@ class UploadResult:
 
 
 class BaseUploader(ABC):
-    def __init__(self, retry_config: RetryConfig) -> None:
+    def __init__(
+        self,
+        retry_config: RetryConfig,
+        cancel_event: threading.Event | None = None,
+    ) -> None:
         self.retry_config = retry_config
+        self.cancel_event = cancel_event
+
+    def _raise_if_cancelled(self) -> None:
+        if self.cancel_event is not None and self.cancel_event.is_set():
+            raise UploadCancelled("Upload przerwany przez uzytkownika")
 
     @property
     @abstractmethod
@@ -66,6 +80,7 @@ class BaseUploader(ABC):
         """Uruchamia operacje z limitem prob i wykladniczym opoznieniem."""
         delay = self.retry_config.initial_backoff_seconds
         for attempt in range(1, self.retry_config.max_attempts + 1):
+            self._raise_if_cancelled()
             try:
                 logger.info(
                     "%s: %s, proba %d/%d",
@@ -92,7 +107,10 @@ class BaseUploader(ABC):
                 logger.info(
                     "%s: ponowienie za %.1f s", self.platform_name, sleep_seconds
                 )
-                time.sleep(sleep_seconds)
+                if self.cancel_event is None:
+                    time.sleep(sleep_seconds)
+                elif self.cancel_event.wait(sleep_seconds):
+                    self._raise_if_cancelled()
                 delay *= self.retry_config.multiplier
 
         raise RuntimeError("Nieosiagalny koniec petli retry")  # pragma: no cover

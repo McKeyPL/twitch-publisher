@@ -2,6 +2,7 @@
 param(
     [string]$Config = "config.yaml",
     [switch]$Once,
+    [switch]$BrowserDebug,
     [ValidateRange(1, 3600)]
     [int]$RestartDelaySeconds = 10
 )
@@ -45,6 +46,9 @@ while ($true) {
     $pythonArguments = @("main.py", "--config", $Config)
     if ($Once) {
         $pythonArguments += "--once"
+    }
+    if ($BrowserDebug) {
+        $pythonArguments += "--browser-debug"
     }
 
     & python @pythonArguments

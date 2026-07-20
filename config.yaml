@@ -67,6 +67,10 @@ browser:
   firefox_profile_path: ${FIREFOX_PROFILE_PATH:-}
   headless: true
   interactive_login_headless: false
+  # Nadpisywane przez CLI --browser-debug.
+  debug: false
+  debug_directory: logs/browser_debug
+  debug_screenshot_interval_seconds: 300
 
 metadata:
   title_template: '{tytul_czysty} | {nick} | {data_YYYY-MM-DD}'

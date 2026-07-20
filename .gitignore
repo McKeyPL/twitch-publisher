@@ -6,3 +6,4 @@ auth/*.json
 data/*.sqlite3
 data/*.sqlite3-*
 logs/*.log*
+logs/browser_debug/
