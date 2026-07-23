@@ -300,6 +300,8 @@ def test_cda_upload_status_does_not_accept_ready_button_as_transfer_completion()
             assert "#uploader .fileListContainer .progress-bar" in script
             assert "transferStatusNode" in script
             assert "predkoscia" in script
+            assert ".replace(/ł/g, 'l')" in script
+            assert r"zosta[lł]\s+przes[lł]any" in script
             assert "complete: completeMarker || Boolean(duplicateMatch)" in script
             assert "completeMarker || Boolean(submit && !submit.disabled)" not in script
             return {
@@ -321,6 +323,33 @@ def test_cda_upload_status_does_not_accept_ready_button_as_transfer_completion()
     assert status["transferred"] == "475 MB"
     assert status["total"] == "475 MB"
     assert status["speed"] == "108.82 mbit/s"
+
+
+def test_cda_trace_completion_text_is_explicitly_supported() -> None:
+    class CompletedPage:
+        def evaluate(self, script):
+            assert "film zostal przeslany i oczekuje na publikacje" in script
+            assert r"publikacj[eę]" in script
+            return {
+                "complete": True,
+                "complete_marker": True,
+                "submit_ready": True,
+                "duplicate_url": None,
+                "success_url": None,
+                "percent": None,
+                "transferred": None,
+                "total": None,
+                "speed": None,
+                "transfer_text": None,
+                "details": [
+                    "Film został przesłany i oczekuje na publikację."
+                ],
+            }
+
+    status = _read_cda_upload_status(CompletedPage())
+
+    assert status["complete"] is True
+    assert status["complete_marker"] is True
 
 
 def test_cda_upload_wait_ignores_button_until_transfer_marker(monkeypatch) -> None:

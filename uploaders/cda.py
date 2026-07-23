@@ -115,7 +115,9 @@ def _read_cda_upload_status(page: object) -> dict[str, Any]:
                     && rect.width > 0 && rect.height > 0;
             };
             const normalize = value => (value || '').normalize('NFD')
-                .replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase();
+                .replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase()
+                // Polish ł/Ł does not decompose under Unicode NFD.
+                .replace(/ł/g, 'l');
             const bodyText = document.body ? document.body.innerText || '' : '';
             const normalizedBody = normalize(bodyText);
             const buttons = Array.from(document.querySelectorAll('button, input[type=submit]'))
@@ -185,7 +187,8 @@ def _read_cda_upload_status(page: object) -> dict[str, Any]:
             }
             const completeMarker = normalizedBody.includes(
                 'film zostal przeslany i oczekuje na publikacje'
-            );
+            ) || /film\s+zosta[lł]\s+przes[lł]any\s+i\s+oczekuje\s+na\s+publikacj[eę]/i
+                .test(bodyText);
             const duplicateMatch = bodyText.match(
                 /przes[lł]any film jest duplikatem[\s\S]{0,600}?(https?:\/\/(?:www\.)?cda\.pl\/video\/[A-Za-z0-9_-]+)/i
             );
@@ -374,7 +377,8 @@ def _set_checkbox_by_text(page: object, text_fragment: str, checked: bool) -> bo
         getattr(page, "evaluate")(
             r"""({fragment, checked}) => {
                 const normalize = value => (value || '').normalize('NFD')
-                    .replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase().trim();
+                    .replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase()
+                    .replace(/ł/g, 'l').trim();
                 const wanted = normalize(fragment);
                 const labels = Array.from(document.querySelectorAll('label'));
                 let label = labels.find(item => normalize(item.innerText).includes(wanted));
@@ -401,7 +405,8 @@ def _set_radio_by_question(page: object, question_fragment: str, answer_yes: boo
         getattr(page, "evaluate")(
             r"""({question, answerYes}) => {
                 const normalize = value => (value || '').normalize('NFD')
-                    .replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase().trim();
+                    .replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase()
+                    .replace(/ł/g, 'l').trim();
                 const wanted = normalize(question);
                 const containers = Array.from(document.querySelectorAll('body *'))
                     .filter(item => normalize(item.innerText).includes(wanted)
