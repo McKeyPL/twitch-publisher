@@ -29,6 +29,7 @@ from uploaders.browser_form import (
 
 
 logger = logging.getLogger(__name__)
+CDA_PUBLICATION_TIMEOUT_MS = 15 * 60 * 1000
 CDA_FORM_DEFAULTS = {
     "private": False,
     "accept_terms": True,
@@ -127,9 +128,25 @@ def _read_cda_upload_status(page: object) -> dict[str, Any]:
                     || loading.includes('dodaj do serwisu');
             });
             const progressNodes = Array.from(document.querySelectorAll(
-                '.progress, .progress-bar, [role=progressbar], .qq-upload-list, '
+                '#uploader .fileListContainer .progress, '
+                + '#uploader .fileListContainer .progress-bar, '
+                + '[role=progressbar], .qq-upload-list, '
                 + '.qq-upload-status-text, .qq-upload-size, [class*=speed], [id*=speed]'
             )).filter(visible);
+            const activeProgressBar = Array.from(document.querySelectorAll(
+                '#uploader .fileListContainer .progress-bar'
+            )).filter(visible).at(-1) || null;
+            const activeRow = activeProgressBar
+                ? (activeProgressBar.closest('.row')
+                    || activeProgressBar.closest('.videoContainer')
+                    || activeProgressBar.parentElement)
+                : null;
+            const transferStatusNode = activeRow
+                ? activeRow.querySelector('.col-md-19')
+                : null;
+            const transferText = transferStatusNode
+                ? (transferStatusNode.innerText || '').trim()
+                : '';
             let percent = null;
             for (const element of progressNodes) {
                 const candidates = [
@@ -149,6 +166,13 @@ def _read_cda_upload_status(page: object) -> dict[str, Any]:
                     }
                 }
             }
+            const normalizedTransfer = normalize(transferText);
+            const sizesMatch = normalizedTransfer.match(
+                /przesylanie:\s*([\d.,]+\s*(?:[kmgtp]?i?b))\s*\/\s*([\d.,]+\s*(?:[kmgtp]?i?b))/i
+            );
+            const speedMatch = normalizedTransfer.match(
+                /predkoscia\s*([\d.,]+\s*[a-z]+\/s)/i
+            );
             const details = Array.from(new Set(bodyText.split(/\r?\n/)
                 .map(line => line.trim())
                 .filter(line => line && (
@@ -156,6 +180,9 @@ def _read_cda_upload_status(page: object) -> dict[str, Any]:
                     || /\d+(?:[.,]\d+)?\s*(?:k|m|g|t)?b\s*\/\s*s/i.test(line)
                     || /pr[eę]dko|pozosta|wysy[lł]|przes[lł]an|upload/i.test(line)
                 )))).slice(0, 12);
+            if (transferText && !details.includes(transferText)) {
+                details.unshift(transferText);
+            }
             const completeMarker = normalizedBody.includes(
                 'film zostal przeslany i oczekuje na publikacje'
             );
@@ -173,14 +200,20 @@ def _read_cda_upload_status(page: object) -> dict[str, Any]:
                 ? successContainer.querySelector('a[href*="/video/"]')
                 : null;
             return {
-                complete: completeMarker || Boolean(submit && !submit.disabled)
-                    || Boolean(duplicateMatch) || Boolean(successLink),
+                // The metadata button can become enabled while the file is still
+                // transferring. It is diagnostic only and must never be treated
+                // as proof that CDA received the complete video.
+                complete: completeMarker || Boolean(duplicateMatch) || Boolean(successLink),
                 complete_marker: completeMarker,
                 submit_ready: Boolean(submit && !submit.disabled),
                 duplicate_url: duplicateMatch ? duplicateMatch[1] : null,
                 success_url: successLink ? successLink.href : null,
                 percent,
-                details,
+                transferred: sizesMatch ? sizesMatch[1].toUpperCase() : null,
+                total: sizesMatch ? sizesMatch[2].toUpperCase() : null,
+                speed: speedMatch ? speedMatch[1] : null,
+                transfer_text: transferText || null,
+                details: details.slice(0, 12),
             };
         }"""
     )
@@ -232,10 +265,25 @@ def _wait_for_cda_upload_complete(
             )
         if now >= next_heartbeat:
             details = status.get("details") or []
+            progress = (
+                f"{status['percent']:g}%"
+                if isinstance(status.get("percent"), (int, float))
+                else "?"
+            )
+            transferred = status.get("transferred")
+            total = status.get("total")
+            amount = (
+                f"{transferred} / {total}"
+                if transferred and total
+                else "?"
+            )
             logger.info(
-                "cda: transfer in progress (%.0f s), progress=%s; panel=%s",
+                "cda: transfer in progress (%.0f s), progress=%s, "
+                "transferred=%s, speed=%s; panel=%s",
                 now - started,
-                status.get("percent"),
+                progress,
+                amount,
+                status.get("speed") or "?",
                 " | ".join(str(item) for item in details) or "no readable data",
             )
             if heartbeat_probe is not None:
@@ -249,15 +297,21 @@ def _cda_result_url(page: object) -> str | None:
     candidates: list[str] = [str(getattr(page, "url", ""))]
     # Do not scan the entire page: CDA's header contains /video/ notification
     # links that are unrelated to the current upload.
-    locator = getattr(page, "locator")(
+    selectors = (
         "#uploader .fileListContainer "
-        ".panel:has(.icon-file.icon-success) a[href*='/video/']"
+        ".panel:has(.icon-file.icon-success) a[href*='/video/']",
+        "#uploader .fileListContainer "
+        ".col-md-19:has(.icon-file.icon-success) a[href*='/video/']",
+        "#uploader .fileListContainer "
+        ".videoContainer:has(.icon-file.icon-success) a[href*='/video/']",
     )
-    for index in range(min(locator.count(), 30)):
-        item = locator.nth(index)
-        href = item.get_attribute("href")
-        if href:
-            candidates.append(href)
+    for selector in selectors:
+        locator = getattr(page, "locator")(selector)
+        for index in range(min(locator.count(), 30)):
+            item = locator.nth(index)
+            href = item.get_attribute("href")
+            if href:
+                candidates.append(href)
     base_url = str(getattr(page, "url", ""))
     if not re.match(r"https?://", base_url):
         base_url = "https://www.cda.pl/"
@@ -274,7 +328,7 @@ def _wait_for_cda_result_url(
     *,
     cancel_check: Callable[[], None] | None = None,
     heartbeat_probe: Callable[[], None] | None = None,
-    timeout_ms: int = UPLOAD_TIMEOUT_MS,
+    timeout_ms: int = CDA_PUBLICATION_TIMEOUT_MS,
 ) -> str:
     started = time.monotonic()
     deadline = started + timeout_ms / 1000
@@ -282,10 +336,15 @@ def _wait_for_cda_result_url(
     while True:
         if cancel_check is not None:
             cancel_check()
-        url = _cda_result_url(page)
+        status = _read_cda_upload_status(page)
+        url = (
+            status.get("success_url")
+            or status.get("duplicate_url")
+            or _cda_result_url(page)
+        )
         if url:
             logger.info("cda: publication confirmed, video URL: %s", url)
-            return url
+            return str(url)
         now = time.monotonic()
         if now >= deadline:
             raise BrowserUploadError(
@@ -296,8 +355,13 @@ def _wait_for_cda_result_url(
             )
         if now >= next_heartbeat:
             logger.info(
-                "cda: waiting for confirmation and video link (%.0f s)",
+                "cda: waiting for confirmation and video link (%.0f s); "
+                "marker=%s, button=%s, panel=%s",
                 now - started,
+                status.get("complete_marker"),
+                status.get("submit_ready"),
+                " | ".join(str(item) for item in status.get("details") or [])
+                or "no readable data",
             )
             if heartbeat_probe is not None:
                 heartbeat_probe()

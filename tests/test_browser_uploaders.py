@@ -6,6 +6,7 @@ from threading import Event
 
 import pytest
 
+import uploaders.cda as cda_module
 from config import BrowserConfig, BrowserPlatformConfig, RetryConfig
 from uploaders.cda import (
     CDAUploader,
@@ -16,8 +17,11 @@ from uploaders.cda import (
     _read_cda_upload_status,
     _set_checkbox_by_text,
     _set_radio_by_question,
+    _wait_for_cda_result_url,
+    _wait_for_cda_upload_complete,
 )
 from uploaders.base import UploadCancelled
+from uploaders.browser_form import BrowserUploadError
 from uploaders.rumble import (
     RumbleUploader,
     _accept_rumble_confirmation,
@@ -289,23 +293,95 @@ def test_cda_semantic_form_answers_are_forwarded() -> None:
     ]
 
 
-def test_cda_upload_status_accepts_ready_add_button() -> None:
+def test_cda_upload_status_does_not_accept_ready_button_as_transfer_completion() -> None:
     class StatusPage:
         def evaluate(self, script):
             assert "dodaj do serwisu" in script
+            assert "#uploader .fileListContainer .progress-bar" in script
+            assert "transferStatusNode" in script
+            assert "predkoscia" in script
+            assert "complete: completeMarker || Boolean(duplicateMatch)" in script
+            assert "completeMarker || Boolean(submit && !submit.disabled)" not in script
             return {
-                "complete": True,
+                "complete": False,
                 "complete_marker": False,
                 "submit_ready": True,
                 "percent": 100,
+                "transferred": "475 MB",
+                "total": "475 MB",
+                "speed": "108.82 mbit/s",
                 "details": ["100%", "12 MB/s"],
             }
 
     status = _read_cda_upload_status(StatusPage())
 
-    assert status["complete"] is True
+    assert status["complete"] is False
     assert status["submit_ready"] is True
     assert status["percent"] == 100
+    assert status["transferred"] == "475 MB"
+    assert status["total"] == "475 MB"
+    assert status["speed"] == "108.82 mbit/s"
+
+
+def test_cda_upload_wait_ignores_button_until_transfer_marker(monkeypatch) -> None:
+    states = iter(
+        (
+            {
+                "complete": False,
+                "complete_marker": False,
+                "submit_ready": True,
+                "percent": None,
+                "details": [],
+            },
+            {
+                "complete": True,
+                "complete_marker": True,
+                "submit_ready": True,
+                "percent": 100,
+                "details": ["100%"],
+            },
+        )
+    )
+    monkeypatch.setattr(cda_module, "_read_cda_upload_status", lambda page: next(states))
+    monkeypatch.setattr(cda_module.time, "sleep", lambda seconds: None)
+
+    result = _wait_for_cda_upload_complete(object(), timeout_ms=10_000)
+
+    assert result["complete_marker"] is True
+
+
+def test_cda_publication_timeout_requires_manual_review(monkeypatch) -> None:
+    class PendingPage:
+        url = "https://www.cda.pl/uploader_video"
+
+        def evaluate(self, script):
+            return {
+                "complete": True,
+                "complete_marker": True,
+                "submit_ready": True,
+                "success_url": None,
+                "duplicate_url": None,
+                "percent": 100,
+                "details": [],
+            }
+
+        def locator(self, selector):
+            return CandidateList([])
+
+    clock = [0.0]
+
+    def monotonic() -> float:
+        clock[0] += 0.02
+        return clock[0]
+
+    monkeypatch.setattr(cda_module.time, "monotonic", monotonic)
+    monkeypatch.setattr(cda_module.time, "sleep", lambda seconds: None)
+
+    with pytest.raises(BrowserUploadError) as caught:
+        _wait_for_cda_result_url(PendingPage(), timeout_ms=10)
+
+    assert caught.value.retriable is False
+    assert caught.value.manual_review_required is True
 
 
 def test_cda_duplicate_status_carries_existing_url() -> None:
@@ -384,12 +460,20 @@ def test_cda_result_url_is_read_from_generated_dom_link() -> None:
     class ResultPage:
         url = "https://www.cda.pl/uploader_video"
 
-        def locator(self, selector):
-            assert ".icon-file.icon-success" in selector
-            assert ".panel:has" in selector
-            return ResultLink(href="/video/abc123")
+        def __init__(self) -> None:
+            self.selectors = []
 
-    assert _cda_result_url(ResultPage()) == "https://www.cda.pl/video/abc123"
+        def locator(self, selector):
+            self.selectors.append(selector)
+            assert ".icon-file.icon-success" in selector
+            if ".col-md-19:has" in selector:
+                return ResultLink(href="/video/abc123")
+            return CandidateList([])
+
+    page = ResultPage()
+
+    assert _cda_result_url(page) == "https://www.cda.pl/video/abc123"
+    assert any(".col-md-19:has" in selector for selector in page.selectors)
 
 
 class CandidateInput:
