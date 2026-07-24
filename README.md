@@ -206,10 +206,11 @@ confirms ownership and terms, limits titles to 100 characters, enforces the
 configured 15 GB file limit, and waits for the server-side upload token after
 chunk transfer and merge before submitting the final form.
 
-If Rumble explicitly returns `The video file has no video track`, the recording is
-marked `SKIPPED` for Rumble instead of being retried forever. This terminal skip
-counts as processed for file movement after every other enabled platform has
-reached `SUCCESS` or `SKIPPED`.
+If Rumble explicitly returns `The video file has no video track`, or the file is
+over Rumble's configured 15 GB limit, the recording is marked `SKIPPED` for Rumble
+instead of being retried forever. Existing size-limit failures are migrated to
+`SKIPPED` on the next cycle. These terminal skips count as processed for file
+movement after every other enabled platform has reached `SUCCESS` or `SKIPPED`.
 
 ## Debugging and cancellation
 

@@ -33,6 +33,7 @@ from uploaders.browser_form import (
 
 logger = logging.getLogger(__name__)
 RUMBLE_NO_VIDEO_TRACK_ERROR = "the video file has no video track"
+RUMBLE_FILE_SIZE_LIMIT_ERROR = "file exceeds the rumble"
 LICENSE_LABELS = {
     "0": "Personal Use",
     "5": "Video Management (exclusive)",
@@ -44,6 +45,12 @@ LICENSE_LABELS = {
 def _is_no_video_track_error(error: object) -> bool:
     """Match only Rumble's terminal damaged/non-video-file response."""
     return RUMBLE_NO_VIDEO_TRACK_ERROR in str(error).casefold()
+
+
+def _is_file_size_limit_error(error: object) -> bool:
+    """Match Rumble's local preflight error for files above its hard limit."""
+    message = str(error).casefold()
+    return RUMBLE_FILE_SIZE_LIMIT_ERROR in message and "limit" in message
 
 
 def _set_category_by_label(page: object, input_selector: str, label: str) -> bool:
@@ -306,6 +313,15 @@ class RumbleUploader(BaseUploader):
                 should_retry=should_retry_browser_error,
             )
         except Exception as exc:
+            if _is_file_size_limit_error(exc):
+                reason = str(exc)
+                logger.warning("rumble: upload skipped: %s", reason)
+                return UploadResult(
+                    success=False,
+                    error_message=reason,
+                    retry_allowed=False,
+                    skipped=True,
+                )
             if _is_no_video_track_error(exc):
                 reason = (
                     "Rumble skipped the recording because the uploaded file has "

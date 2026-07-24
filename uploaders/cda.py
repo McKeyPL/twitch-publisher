@@ -94,6 +94,107 @@ def _clear_cda_stale_uploads(
         removed += 1
 
 
+def _dismiss_cda_consent_overlay(page: object, *, timeout_seconds: float = 5.0) -> bool:
+    """Accept the CDA cookie dialog when it blocks the publication button."""
+    evaluate = getattr(page, "evaluate", None)
+    if not callable(evaluate):
+        return False
+
+    overlay_visible = bool(
+        evaluate(
+            r"""() => {
+                const visible = element => {
+                    const style = window.getComputedStyle(element);
+                    const rect = element.getBoundingClientRect();
+                    return style.display !== 'none' && style.visibility !== 'hidden'
+                        && rect.width > 0 && rect.height > 0;
+                };
+                return Array.from(document.querySelectorAll(
+                    '.fc-consent-root, .fc-dialog-overlay'
+                )).some(visible);
+            }"""
+        )
+    )
+    if not overlay_visible:
+        return False
+
+    clicked = bool(
+        evaluate(
+            r"""() => {
+                const visible = element => {
+                    const style = window.getComputedStyle(element);
+                    const rect = element.getBoundingClientRect();
+                    return style.display !== 'none' && style.visibility !== 'hidden'
+                        && rect.width > 0 && rect.height > 0;
+                };
+                const root = document.querySelector('.fc-consent-root');
+                if (!root || !visible(root)) return false;
+                const accept = /akceptuj|zgadzam|accept|agree|allow|zezw[oó]l|potwierd|continue|save/i;
+                const controls = Array.from(root.querySelectorAll(
+                    'button, [role="button"], input[type="button"], '
+                    + 'input[type="submit"], a[role="button"]'
+                )).filter(visible);
+                const target = controls.find(element =>
+                    accept.test((element.innerText || element.value || '').trim())
+                );
+                if (!target) return false;
+                target.click();
+                return true;
+            }"""
+        )
+    )
+    if not clicked:
+        raise BrowserUploadError(
+            "CDA cookie-consent overlay is blocking the publication button; "
+            "no accept-all control was found",
+            retriable=False,
+        )
+
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        if not bool(
+            evaluate(
+                r"""() => {
+                    const visible = element => {
+                        const style = window.getComputedStyle(element);
+                        const rect = element.getBoundingClientRect();
+                        return style.display !== 'none' && style.visibility !== 'hidden'
+                            && rect.width > 0 && rect.height > 0;
+                    };
+                    return Array.from(document.querySelectorAll(
+                        '.fc-consent-root, .fc-dialog-overlay'
+                    )).some(visible);
+                }"""
+            )
+        ):
+            logger.info("cda: dismissed cookie-consent overlay before publication")
+            return True
+        if time.monotonic() >= deadline:
+            raise BrowserUploadError(
+                "CDA cookie-consent overlay did not disappear after accepting it",
+                retriable=False,
+            )
+        time.sleep(0.1)
+
+
+def _clear_cda_stale_uploads_after_success(
+    page: object,
+    *,
+    cancel_check: Callable[[], None] | None = None,
+) -> None:
+    """Best-effort cleanup after CDA already returned a definitive video URL."""
+    try:
+        _clear_cda_stale_uploads(page, cancel_check=cancel_check)
+    except Exception as exc:
+        # A confirmed URL is authoritative.  Cleanup must never turn SUCCESS
+        # into a retry, which can create a duplicate upload.  This includes
+        # Playwright target/context errors in addition to our own timeout.
+        logger.warning(
+            "cda: video URL is confirmed, but stale upload-list cleanup failed: %s",
+            exc,
+        )
+
+
 def _find_cda_submit_button(page: object) -> object:
     """Find the publication button in either known CDA variant."""
     return unique_visible_locator(
@@ -679,7 +780,7 @@ class CDAUploader(BaseUploader):
             duplicate_url = upload_status.get("duplicate_url")
             success_url = upload_status.get("success_url")
             if success_url:
-                _clear_cda_stale_uploads(
+                _clear_cda_stale_uploads_after_success(
                     page,
                     cancel_check=self._raise_if_cancelled,
                 )
@@ -691,7 +792,7 @@ class CDAUploader(BaseUploader):
                     captions_uploaded=False,
                 )
             if duplicate_url:
-                _clear_cda_stale_uploads(
+                _clear_cda_stale_uploads_after_success(
                     page,
                     cancel_check=self._raise_if_cancelled,
                 )
@@ -771,6 +872,7 @@ class CDAUploader(BaseUploader):
                     )
 
             report_manual_captions("cda", srt_path)
+            _dismiss_cda_consent_overlay(page)
             submit = _find_cda_submit_button(page)
             logger.info(
                 "cda: metadata form completed; clicking the publication button"
@@ -783,7 +885,7 @@ class CDAUploader(BaseUploader):
                     page, "waiting_for_publication"
                 ),
             )
-            _clear_cda_stale_uploads(
+            _clear_cda_stale_uploads_after_success(
                 page,
                 cancel_check=self._raise_if_cancelled,
             )

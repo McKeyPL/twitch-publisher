@@ -25,7 +25,7 @@ from state import StateStore, UploadStatus
 from title_cleaner import title_from_metadata
 from uploaders.base import BaseUploader
 from uploaders.cda import CDAUploader
-from uploaders.rumble import RumbleUploader
+from uploaders.rumble import RumbleUploader, _is_file_size_limit_error
 from uploaders.youtube import YouTubeUploader
 from watcher import scan_cycle
 
@@ -197,6 +197,18 @@ def process_ready_recording(
                 UploadStatus.SKIPPED,
             }:
                 logger.info("%s: skipping terminal status %s", platform, current.status.value)
+                continue
+            if (
+                platform == "rumble"
+                and current is not None
+                and current.status is UploadStatus.FAILED
+                and _is_file_size_limit_error(current.last_error or "")
+            ):
+                reason = current.last_error or "Rumble file-size limit"
+                state_store.mark_skipped(video_path, platform, reason)
+                logger.warning(
+                    "rumble: converted the previous file-size-limit failure to SKIPPED"
+                )
                 continue
             if (
                 platform == "rumble"

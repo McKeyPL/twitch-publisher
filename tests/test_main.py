@@ -275,6 +275,35 @@ def test_existing_rumble_no_video_track_failure_is_migrated_to_skip(
     assert not video.exists()
 
 
+def test_existing_rumble_file_size_failure_is_migrated_to_skip(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config = config_for(tmp_path, monkeypatch)
+    video, metadata = make_recording(config.paths.recordings_root)
+    rumble = FakeUploader("rumble", config.retry)
+
+    with StateStore(config.paths.database) as store:
+        store.mark_failed(
+            video,
+            "rumble",
+            "[NO_AUTO_RETRY] File exceeds the Rumble 15 GB limit: recording.mkv",
+        )
+        process_ready_recording(
+            video,
+            metadata,
+            3600,
+            config,
+            store,
+            {"rumble": rumble},
+        )
+        record = store.get_status(video, "rumble")
+
+    assert record is not None
+    assert record.status is UploadStatus.SKIPPED
+    assert rumble.uploaded == []
+    assert not video.exists()
+
+
 def test_sigint_interrupts_active_operation_immediately() -> None:
     event = threading.Event()
 

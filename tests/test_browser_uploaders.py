@@ -12,6 +12,7 @@ from uploaders.cda import (
     CDAUploader,
     _cda_result_url,
     _clear_cda_stale_uploads,
+    _dismiss_cda_consent_overlay,
     _find_cda_title_input,
     _find_cda_submit_button,
     _read_cda_upload_status,
@@ -25,6 +26,7 @@ from uploaders.browser_form import BrowserUploadError
 from uploaders.rumble import (
     RumbleUploader,
     _accept_rumble_confirmation,
+    _is_file_size_limit_error,
     _is_no_video_track_error,
     _read_rumble_transfer_status,
     _rumble_result_url,
@@ -91,6 +93,15 @@ def test_rumble_rejects_file_over_har_limit_before_browser(tmp_path: Path) -> No
 
     assert result.success is False
     assert "exceeds the Rumble" in (result.error_message or "")
+    assert result.skipped is True
+    assert result.retry_allowed is False
+
+
+def test_rumble_file_size_error_is_recognized_as_terminal_skip() -> None:
+    assert _is_file_size_limit_error(
+        "File exceeds the Rumble 15 GB limit: recording.mkv"
+    )
+    assert not _is_file_size_limit_error("network error")
 
 
 def test_rumble_no_video_track_is_returned_as_legal_skip(tmp_path: Path) -> None:
@@ -598,6 +609,46 @@ def test_cda_stale_upload_cards_are_removed_before_new_file() -> None:
 
     assert _clear_cda_stale_uploads(page) == 2
     assert page.count == 0
+
+
+def test_cda_consent_overlay_is_dismissed_before_publication() -> None:
+    class ConsentPage:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def evaluate(self, script):
+            self.calls += 1
+            if self.calls == 1:
+                assert ".fc-consent-root" in script
+                return True
+            if self.calls == 2:
+                assert "akceptuj|zgadzam" in script
+                return True
+            return False
+
+    page = ConsentPage()
+
+    assert _dismiss_cda_consent_overlay(page) is True
+    assert page.calls == 3
+
+
+def test_cda_post_success_cleanup_failure_does_not_change_success(monkeypatch) -> None:
+    class FailingCleanupPage:
+        def locator(self, selector):
+            raise AssertionError("not used")
+
+    # The helper is intentionally best-effort; this regression is covered by
+    # invoking it through a page whose stale-card lookup fails.
+    def fail_cleanup(*args, **kwargs):
+        raise BrowserUploadError("item did not disappear", retriable=True)
+
+    monkeypatch.setattr(
+        cda_module,
+        "_clear_cda_stale_uploads",
+        fail_cleanup,
+    )
+
+    cda_module._clear_cda_stale_uploads_after_success(FailingCleanupPage())
 
 
 def test_cda_current_add_to_service_button_is_supported() -> None:
