@@ -30,6 +30,7 @@ class FakeUploader(BaseUploader):
         self.result = result or UploadResult(True, f"{name}-id", f"https://{name}.test/id")
         self.error = error
         self.uploaded: list[Path] = []
+        self.titles: list[str] = []
         self.playlisted: list[str] = []
 
     @property
@@ -38,6 +39,7 @@ class FakeUploader(BaseUploader):
 
     def upload(self, video_path, title, description, tags, srt_path=None):
         self.uploaded.append(Path(video_path))
+        self.titles.append(title)
         if self.error:
             raise self.error
         return self.result
@@ -181,6 +183,95 @@ def test_duration_limit_skips_only_limited_platform(tmp_path: Path, monkeypatch)
         assert store.get_status(video, "rumble").status is UploadStatus.SUCCESS
 
     assert uploaders["youtube"].uploaded == []
+    assert not video.exists()
+
+
+def test_rumble_title_is_limited_to_100_characters(tmp_path: Path, monkeypatch) -> None:
+    config = config_for(tmp_path, monkeypatch)
+    video, metadata = make_recording(config.paths.recordings_root)
+    metadata = replace(metadata, title="Very long stream title " * 20)
+    rumble = FakeUploader("rumble", config.retry)
+
+    with StateStore(config.paths.database) as store:
+        process_ready_recording(
+            video,
+            metadata,
+            3600,
+            config,
+            store,
+            {"rumble": rumble},
+        )
+
+    assert len(rumble.titles) == 1
+    assert len(rumble.titles[0]) == 100
+    assert rumble.titles[0].endswith(" | mrozopl | 2026-07-12")
+
+
+def test_rumble_no_video_track_skip_allows_recording_move(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config = config_for(tmp_path, monkeypatch)
+    video, metadata = make_recording(config.paths.recordings_root)
+    rumble = FakeUploader(
+        "rumble",
+        config.retry,
+        result=UploadResult(
+            success=False,
+            error_message="Rumble skipped the recording because it has no video track",
+            retry_allowed=False,
+            skipped=True,
+        ),
+    )
+
+    with StateStore(config.paths.database) as store:
+        process_ready_recording(
+            video,
+            metadata,
+            3600,
+            config,
+            store,
+            {"rumble": rumble},
+        )
+        record = store.get_status(video, "rumble")
+
+    assert record is not None
+    assert record.status is UploadStatus.SKIPPED
+    assert "no video track" in (record.last_error or "")
+    assert not video.exists()
+    assert (
+        config.paths.recordings_root
+        / "mrozopl"
+        / config.moving.uploaded_directory_name
+        / video.name
+    ).is_file()
+
+
+def test_existing_rumble_no_video_track_failure_is_migrated_to_skip(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config = config_for(tmp_path, monkeypatch)
+    video, metadata = make_recording(config.paths.recordings_root)
+    rumble = FakeUploader("rumble", config.retry)
+
+    with StateStore(config.paths.database) as store:
+        store.mark_failed(
+            video,
+            "rumble",
+            "[NO_AUTO_RETRY] The video file has no video track",
+        )
+        process_ready_recording(
+            video,
+            metadata,
+            3600,
+            config,
+            store,
+            {"rumble": rumble},
+        )
+        record = store.get_status(video, "rumble")
+
+    assert record is not None
+    assert record.status is UploadStatus.SKIPPED
+    assert rumble.uploaded == []
     assert not video.exists()
 
 

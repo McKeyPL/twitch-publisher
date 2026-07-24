@@ -202,9 +202,14 @@ Rumble requires an explicit license selection:
 ```
 
 The uploader sets the primary category, attempts a matching game category,
-confirms ownership and terms, enforces the configured 15 GB file limit, and waits
-for the server-side upload token after chunk transfer and merge before submitting
-the final form.
+confirms ownership and terms, limits titles to 100 characters, enforces the
+configured 15 GB file limit, and waits for the server-side upload token after
+chunk transfer and merge before submitting the final form.
+
+If Rumble explicitly returns `The video file has no video track`, the recording is
+marked `SKIPPED` for Rumble instead of being retried forever. This terminal skip
+counts as processed for file movement after every other enabled platform has
+reached `SUCCESS` or `SKIPPED`.
 
 ## Debugging and cancellation
 

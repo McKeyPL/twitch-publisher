@@ -25,6 +25,7 @@ from uploaders.browser_form import BrowserUploadError
 from uploaders.rumble import (
     RumbleUploader,
     _accept_rumble_confirmation,
+    _is_no_video_track_error,
     _read_rumble_transfer_status,
     _rumble_result_url,
     _set_category_by_label,
@@ -90,6 +91,29 @@ def test_rumble_rejects_file_over_har_limit_before_browser(tmp_path: Path) -> No
 
     assert result.success is False
     assert "exceeds the Rumble" in (result.error_message or "")
+
+
+def test_rumble_no_video_track_is_returned_as_legal_skip(tmp_path: Path) -> None:
+    video = tmp_path / "damaged.mkv"
+    video.write_bytes(b"not-a-valid-video")
+    uploader = RumbleUploader(
+        replace(platform(tmp_path, "rumble"), license_option="6"),
+        browser(),
+        retry(),
+    )
+
+    def fail_upload(*args, **kwargs):
+        raise BrowserUploadError("The video file has no video track", retriable=False)
+
+    uploader._with_retry = fail_upload  # type: ignore[method-assign]
+
+    result = uploader.upload(video, "Title", "Description", [])
+
+    assert _is_no_video_track_error("THE VIDEO FILE HAS NO VIDEO TRACK")
+    assert result.success is False
+    assert result.skipped is True
+    assert result.retry_allowed is False
+    assert "no video track" in (result.error_message or "")
 
 
 class FakeLocator:
@@ -253,6 +277,24 @@ def test_rumble_transfer_status_requires_nonempty_video_token() -> None:
 
     assert status["percent"] == 100
     assert status["complete"] is False
+
+
+def test_rumble_no_video_track_stops_transfer_without_retry() -> None:
+    class InvalidVideoPage:
+        def evaluate(self, script):
+            return {
+                "complete": False,
+                "failed": True,
+                "percent": 100,
+                "details": ["100%"],
+                "error": "The video file has no video track",
+            }
+
+    with pytest.raises(BrowserUploadError) as caught:
+        _wait_for_rumble_transfer(InvalidVideoPage(), timeout_ms=10_000)
+
+    assert caught.value.retriable is False
+    assert _is_no_video_track_error(caught.value)
 
 
 def test_cancel_token_stops_before_opening_browser(tmp_path: Path) -> None:

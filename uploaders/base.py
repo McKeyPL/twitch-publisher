@@ -29,6 +29,7 @@ class UploadResult:
     error_message: str | None = None
     captions_uploaded: bool = False
     retry_allowed: bool = True
+    skipped: bool = False
 
 
 class BaseUploader(ABC):

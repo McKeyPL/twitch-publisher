@@ -62,8 +62,9 @@ platforms:
     enabled: true
     upload_url: https://rumble.com/upload.php
     storage_state_file: auth/rumble_state.json
-    # TODO: manually verify the current title and video-duration limits.
-    title_limit: null
+    # Confirmed by the upload form: titles cannot exceed 100 characters.
+    title_limit: 100
+    # TODO: manually verify the current video-duration limit.
     max_duration_hours: null
     # HAR captured on 2026-07-20: category required, file size limited to 15 GB.
     primary_category: Gaming

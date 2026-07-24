@@ -72,6 +72,7 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(config.platforms.youtube.captions_name, "Twitch Chat")
         self.assertEqual(config.platforms.youtube.daily_upload_limit, 100)
         self.assertEqual(config.platforms.rumble.primary_category, "Gaming")
+        self.assertEqual(config.platforms.rumble.title_limit, 100)
         self.assertEqual(config.platforms.rumble.max_file_size_gb, 15.0)
         self.assertTrue(config.platforms.cda.form_options["accept_terms"])
         self.assertTrue(config.platforms.cda.form_options["confirm_rights"])

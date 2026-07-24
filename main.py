@@ -199,6 +199,22 @@ def process_ready_recording(
                 logger.info("%s: skipping terminal status %s", platform, current.status.value)
                 continue
             if (
+                platform == "rumble"
+                and current is not None
+                and current.status is UploadStatus.FAILED
+                and "the video file has no video track"
+                in (current.last_error or "").casefold()
+            ):
+                reason = (
+                    "Rumble skipped the recording because the uploaded file has "
+                    "no video track"
+                )
+                state_store.mark_skipped(video_path, platform, reason)
+                logger.warning(
+                    "rumble: converted the previous no-video-track failure to SKIPPED"
+                )
+                continue
+            if (
                 current is not None
                 and current.status is UploadStatus.FAILED
                 and (current.last_error or "").startswith(NO_AUTO_RETRY_PREFIX)
@@ -225,6 +241,11 @@ def process_ready_recording(
             )
             state_store.mark_in_progress(video_path, platform)
             result = uploader.upload(video_path, title, description, tags, srt_path)
+            if result.skipped:
+                reason = result.error_message or f"{platform} intentionally skipped the upload"
+                state_store.mark_skipped(video_path, platform, reason)
+                logger.warning("%s: upload skipped: %s", platform, reason)
+                continue
             if not result.success:
                 error = result.error_message or "Uploader returned success=False"
                 if not result.retry_allowed:

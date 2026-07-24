@@ -32,12 +32,18 @@ from uploaders.browser_form import (
 
 
 logger = logging.getLogger(__name__)
+RUMBLE_NO_VIDEO_TRACK_ERROR = "the video file has no video track"
 LICENSE_LABELS = {
     "0": "Personal Use",
     "5": "Video Management (exclusive)",
     "6": "Rumble Only (non-exclusive)",
     "7": "Video Management (excluding YouTube)",
 }
+
+
+def _is_no_video_track_error(error: object) -> bool:
+    """Match only Rumble's terminal damaged/non-video-file response."""
+    return RUMBLE_NO_VIDEO_TRACK_ERROR in str(error).casefold()
 
 
 def _set_category_by_label(page: object, input_selector: str, label: str) -> bool:
@@ -186,9 +192,10 @@ def _wait_for_rumble_transfer(
         status = _read_rumble_transfer_status(page)
         if status.get("failed") or status.get("error"):
             detail = status.get("error") or "Rumble marked the transfer as ERROR"
+            no_video_track = _is_no_video_track_error(detail)
             raise BrowserUploadError(
                 f"Rumble file transfer failed: {detail}",
-                retriable=True,
+                retriable=not no_video_track,
             )
         if status.get("complete"):
             logger.info(
@@ -299,6 +306,18 @@ class RumbleUploader(BaseUploader):
                 should_retry=should_retry_browser_error,
             )
         except Exception as exc:
+            if _is_no_video_track_error(exc):
+                reason = (
+                    "Rumble skipped the recording because the uploaded file has "
+                    "no video track"
+                )
+                logger.warning("rumble: %s: %s", reason, video_path)
+                return UploadResult(
+                    success=False,
+                    error_message=reason,
+                    retry_allowed=False,
+                    skipped=True,
+                )
             logger.error("rumble: upload %s failed: %s", video_path, exc)
             return UploadResult(
                 success=False,
