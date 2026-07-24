@@ -421,6 +421,96 @@ def test_cda_upload_wait_ignores_button_until_transfer_marker(monkeypatch) -> No
     assert result["complete_marker"] is True
 
 
+def test_cda_upload_wait_fails_fast_on_upload_request_error(monkeypatch) -> None:
+    monkeypatch.setattr(
+        cda_module,
+        "_read_cda_upload_status",
+        lambda page: {
+            "complete": False,
+            "complete_marker": False,
+            "submit_ready": True,
+            "percent": 13,
+            "transferred": "585 MB",
+            "total": "4.28 GB",
+            "speed": "0 Mbit/s",
+            "transfer_text": "13% Przesyłanie",
+            "details": [],
+        },
+    )
+
+    with pytest.raises(
+        BrowserUploadError, match="CORS request did not succeed"
+    ) as caught:
+        _wait_for_cda_upload_complete(
+            object(),
+            failure_probe=lambda: "CORS request did not succeed",
+            timeout_ms=60_000,
+        )
+
+    assert caught.value.retriable is True
+
+
+def test_cda_upload_wait_detects_stalled_transfer(monkeypatch) -> None:
+    states = iter(
+        (
+            {
+                "complete": False,
+                "complete_marker": False,
+                "submit_ready": True,
+                "percent": 13,
+                "transferred": "585 MB",
+                "total": "4.28 GB",
+                "speed": "145 Mbit/s",
+                "transfer_text": "13% Przesyłanie",
+                "details": [],
+            },
+            {
+                "complete": False,
+                "complete_marker": False,
+                "submit_ready": True,
+                "percent": None,
+                "transferred": None,
+                "total": None,
+                "speed": None,
+                "transfer_text": None,
+                "details": [],
+            },
+            {
+                "complete": False,
+                "complete_marker": False,
+                "submit_ready": True,
+                "percent": None,
+                "transferred": None,
+                "total": None,
+                "speed": None,
+                "transfer_text": None,
+                "details": [],
+            },
+        )
+    )
+    clock = [0.0]
+
+    def monotonic() -> float:
+        clock[0] += 1.0
+        return clock[0]
+
+    monkeypatch.setattr(
+        cda_module, "_read_cda_upload_status", lambda page: next(states)
+    )
+    monkeypatch.setattr(cda_module.time, "monotonic", monotonic)
+    monkeypatch.setattr(cda_module.time, "sleep", lambda seconds: None)
+
+    with pytest.raises(BrowserUploadError, match="transfer stalled") as caught:
+        _wait_for_cda_upload_complete(
+            object(),
+            timeout_ms=60_000,
+            heartbeat_interval_ms=60_000,
+            stall_timeout_ms=1,
+        )
+
+    assert caught.value.retriable is True
+
+
 def test_cda_publication_timeout_requires_manual_review(monkeypatch) -> None:
     class PendingPage:
         url = "https://www.cda.pl/uploader_video"

@@ -30,6 +30,12 @@ from uploaders.browser_form import (
 
 logger = logging.getLogger(__name__)
 CDA_PUBLICATION_TIMEOUT_MS = 15 * 60 * 1000
+# CDA renders the metadata form before the binary transfer is complete.  If the
+# browser loses the upload-resume connection, the form remains on screen and the
+# old implementation waited for the global 12-hour upload timeout.  A successful
+# transfer normally updates its byte counter continuously, so two minutes without
+# any progress is a safe bounded indication that the transfer has stalled.
+CDA_TRANSFER_STALL_TIMEOUT_MS = 2 * 60 * 1000
 CDA_FORM_DEFAULTS = {
     "private": False,
     "accept_terms": True,
@@ -228,16 +234,29 @@ def _wait_for_cda_upload_complete(
     *,
     cancel_check: Callable[[], None] | None = None,
     heartbeat_probe: Callable[[], None] | None = None,
+    failure_probe: Callable[[], str | None] | None = None,
     timeout_ms: int = UPLOAD_TIMEOUT_MS,
     heartbeat_interval_ms: int = HEARTBEAT_INTERVAL_MS,
+    stall_timeout_ms: int = CDA_TRANSFER_STALL_TIMEOUT_MS,
 ) -> dict[str, Any]:
     """Wait for publication readiness while reporting CDA progress and speed."""
+    if timeout_ms <= 0 or heartbeat_interval_ms <= 0 or stall_timeout_ms <= 0:
+        raise ValueError("CDA upload timeouts and heartbeat interval must be positive")
     started = time.monotonic()
     deadline = started + timeout_ms / 1000
     next_heartbeat = started
+    last_progress_signature: tuple[Any, ...] | None = None
+    last_progress_at = started
     while True:
         if cancel_check is not None:
             cancel_check()
+        if failure_probe is not None:
+            failure = failure_probe()
+            if failure:
+                raise BrowserUploadError(
+                    f"CDA upload transfer failed before completion: {failure}",
+                    retriable=True,
+                )
         status = _read_cda_upload_status(page)
         if status.get("success_url"):
             logger.info(
@@ -261,6 +280,25 @@ def _wait_for_cda_upload_complete(
             )
             return status
         now = time.monotonic()
+        transfer_signal = (
+            status.get("percent"),
+            status.get("transferred"),
+            status.get("total"),
+        )
+        has_transfer_signal = any(value is not None for value in transfer_signal)
+        if has_transfer_signal:
+            if transfer_signal != last_progress_signature:
+                last_progress_signature = transfer_signal
+                last_progress_at = now
+        elif last_progress_signature is not None:
+            stalled_for = now - last_progress_at
+            if stalled_for >= stall_timeout_ms / 1000:
+                raise BrowserUploadError(
+                    "CDA upload transfer stalled: no progress was reported for "
+                    f"{stalled_for:.0f} s; the metadata form is not proof that "
+                    "the complete video was received",
+                    retriable=True,
+                )
         if now >= deadline:
             raise BrowserUploadError(
                 "CDA timed out while waiting for transfer completion",
@@ -562,6 +600,57 @@ class CDAUploader(BaseUploader):
                 size_gib,
                 video_path,
             )
+
+            upload_failures: list[str] = []
+
+            def remember_failure(message: str) -> None:
+                message = message.strip()
+                if message and message not in upload_failures:
+                    upload_failures.append(message)
+
+            def on_request_failed(request: object) -> None:
+                url = str(getattr(request, "url", ""))
+                if "upload-resume" not in url:
+                    return
+                failure = getattr(request, "failure", None)
+                if callable(failure):
+                    try:
+                        failure = failure()
+                    except Exception:
+                        failure = None
+                suffix = f" ({failure})" if failure else ""
+                remember_failure(
+                    f"{getattr(request, 'method', 'request')} {url}{suffix}"
+                )
+
+            def on_console(message: object) -> None:
+                text = str(getattr(message, "text", ""))
+                message_type = str(getattr(message, "type", ""))
+                if (
+                    "upload-resume" in text.lower()
+                    and (message_type.lower() == "error" or "cors" in text.lower())
+                ):
+                    remember_failure(text)
+
+            def on_response(response: object) -> None:
+                url = str(getattr(response, "url", ""))
+                status = getattr(response, "status", 0)
+                if (
+                    "upload-resume" in url
+                    and isinstance(status, int)
+                    and status >= 400
+                ):
+                    remember_failure(f"HTTP {status} from {url}")
+
+            page_on = getattr(page, "on", None)
+            if callable(page_on):
+                # BrowserSessionManager already logs these events.  Keeping a
+                # small local buffer lets the transfer wait loop fail immediately
+                # instead of treating a visible metadata form as completion.
+                page_on("requestfailed", on_request_failed)
+                page_on("console", on_console)
+                page_on("response", on_response)
+
             file_input = unique_locator(
                 page,
                 (
@@ -585,6 +674,7 @@ class CDAUploader(BaseUploader):
                 heartbeat_probe=lambda: self._debug_snapshot(
                     page, "upload_progress"
                 ),
+                failure_probe=lambda: upload_failures[0] if upload_failures else None,
             )
             duplicate_url = upload_status.get("duplicate_url")
             success_url = upload_status.get("success_url")
