@@ -186,7 +186,7 @@ def test_duration_limit_skips_only_limited_platform(tmp_path: Path, monkeypatch)
     assert not video.exists()
 
 
-def test_rumble_title_is_limited_to_100_characters(tmp_path: Path, monkeypatch) -> None:
+def test_rumble_title_is_limited_to_90_characters(tmp_path: Path, monkeypatch) -> None:
     config = config_for(tmp_path, monkeypatch)
     video, metadata = make_recording(config.paths.recordings_root)
     metadata = replace(metadata, title="Very long stream title " * 20)
@@ -203,7 +203,7 @@ def test_rumble_title_is_limited_to_100_characters(tmp_path: Path, monkeypatch) 
         )
 
     assert len(rumble.titles) == 1
-    assert len(rumble.titles[0]) == 100
+    assert len(rumble.titles[0]) == 90
     assert rumble.titles[0].endswith(" | mrozopl | 2026-07-12")
 
 

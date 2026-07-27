@@ -202,7 +202,7 @@ Rumble requires an explicit license selection:
 ```
 
 The uploader sets the primary category, attempts a matching game category,
-confirms ownership and terms, limits titles to 100 characters, enforces the
+confirms ownership and terms, limits titles to a safe 90 characters, enforces the
 configured 15 GB file limit, and waits for the server-side upload token after
 chunk transfer and merge before submitting the final form.
 
