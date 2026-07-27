@@ -178,6 +178,9 @@ publisher logs the SRT path for manual addition.
 The CDA uploader:
 
 - removes stale completed/failed cards before selecting another file;
+- accepts a blocking CDA consent dialog before selecting the file;
+- detects HTTP failures from both upload initialization and resumable transfer;
+- aborts and retries when no upload card appears or progress stops changing;
 - waits for real transfer completion and logs progress, speed, and panel text;
 - fills title, description, tags, terms, ownership, and all content declarations;
 - defaults content declarations to No and accepts required terms/ownership;

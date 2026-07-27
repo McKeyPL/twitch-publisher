@@ -10,11 +10,13 @@ import uploaders.cda as cda_module
 from config import BrowserConfig, BrowserPlatformConfig, RetryConfig
 from uploaders.cda import (
     CDAUploader,
+    _cda_upload_response_error,
     _cda_result_url,
     _clear_cda_stale_uploads,
     _dismiss_cda_consent_overlay,
     _find_cda_title_input,
     _find_cda_submit_button,
+    _is_cda_upload_endpoint,
     _read_cda_upload_status,
     _set_checkbox_by_text,
     _set_radio_by_question,
@@ -461,6 +463,61 @@ def test_cda_upload_wait_fails_fast_on_upload_request_error(monkeypatch) -> None
     assert caught.value.retriable is True
 
 
+def test_cda_initialization_endpoint_is_monitored() -> None:
+    assert _is_cda_upload_endpoint("https://upload-api.cda.pl/uploader")
+    assert _is_cda_upload_endpoint(
+        "https://upload-api.cda.pl/upload-resume/abc?offset=123"
+    )
+    assert not _is_cda_upload_endpoint("https://www.cda.pl/uploader_video")
+    assert not _is_cda_upload_endpoint("https://example.test/upload-resume")
+
+
+def test_cda_initialization_http_500_is_reported() -> None:
+    class Response:
+        url = "https://upload-api.cda.pl/uploader"
+        status = 500
+
+    assert _cda_upload_response_error(Response()) == (
+        "HTTP 500 from https://upload-api.cda.pl/uploader"
+    )
+
+
+def test_cda_upload_wait_detects_transfer_that_never_started(monkeypatch) -> None:
+    monkeypatch.setattr(
+        cda_module,
+        "_read_cda_upload_status",
+        lambda page: {
+            "complete": False,
+            "complete_marker": False,
+            "submit_ready": False,
+            "percent": None,
+            "transferred": None,
+            "total": None,
+            "speed": None,
+            "transfer_text": None,
+            "details": [],
+        },
+    )
+    clock = [0.0]
+
+    def monotonic() -> float:
+        clock[0] += 1.0
+        return clock[0]
+
+    monkeypatch.setattr(cda_module.time, "monotonic", monotonic)
+    monkeypatch.setattr(cda_module.time, "sleep", lambda seconds: None)
+
+    with pytest.raises(BrowserUploadError, match="upload did not start") as caught:
+        _wait_for_cda_upload_complete(
+            object(),
+            timeout_ms=60_000,
+            heartbeat_interval_ms=60_000,
+            start_timeout_ms=1,
+        )
+
+    assert caught.value.retriable is True
+
+
 def test_cda_upload_wait_detects_stalled_transfer(monkeypatch) -> None:
     states = iter(
         (
@@ -512,6 +569,39 @@ def test_cda_upload_wait_detects_stalled_transfer(monkeypatch) -> None:
     monkeypatch.setattr(cda_module.time, "sleep", lambda seconds: None)
 
     with pytest.raises(BrowserUploadError, match="transfer stalled") as caught:
+        _wait_for_cda_upload_complete(
+            object(),
+            timeout_ms=60_000,
+            heartbeat_interval_ms=60_000,
+            stall_timeout_ms=1,
+        )
+
+    assert caught.value.retriable is True
+
+
+def test_cda_upload_wait_detects_unchanged_progress(monkeypatch) -> None:
+    status = {
+        "complete": False,
+        "complete_marker": False,
+        "submit_ready": True,
+        "percent": 13,
+        "transferred": "585 MB",
+        "total": "4.28 GB",
+        "speed": "0 Mbit/s",
+        "transfer_text": "13% Przesyłanie",
+        "details": [],
+    }
+    clock = [0.0]
+
+    def monotonic() -> float:
+        clock[0] += 1.0
+        return clock[0]
+
+    monkeypatch.setattr(cda_module, "_read_cda_upload_status", lambda page: status)
+    monkeypatch.setattr(cda_module.time, "monotonic", monotonic)
+    monkeypatch.setattr(cda_module.time, "sleep", lambda seconds: None)
+
+    with pytest.raises(BrowserUploadError, match="progress has not changed") as caught:
         _wait_for_cda_upload_complete(
             object(),
             timeout_ms=60_000,

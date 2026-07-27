@@ -8,7 +8,7 @@ import threading
 import time
 from pathlib import Path
 from typing import Any, Callable
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 from auth.browser_session import BrowserSessionManager
 from config import BrowserConfig, BrowserPlatformConfig, RetryConfig
@@ -36,6 +36,10 @@ CDA_PUBLICATION_TIMEOUT_MS = 15 * 60 * 1000
 # transfer normally updates its byte counter continuously, so two minutes without
 # any progress is a safe bounded indication that the transfer has stalled.
 CDA_TRANSFER_STALL_TIMEOUT_MS = 2 * 60 * 1000
+# The upload card and the first progress response normally appear almost
+# immediately after set_input_files().  A missing card for this long means the
+# upload initialization request failed or CDA never attached its file handler.
+CDA_TRANSFER_START_TIMEOUT_MS = 45 * 1000
 CDA_FORM_DEFAULTS = {
     "private": False,
     "accept_terms": True,
@@ -50,6 +54,34 @@ CDA_STALE_REMOVE_SELECTOR = (
     "#uploader .videoContainer .fileListContainer "
     ".panel-heading-actions .icon-remove-sign"
 )
+
+
+def _is_cda_upload_endpoint(url: object) -> bool:
+    """Return True for CDA's initialization and resumable-transfer endpoints."""
+    value = str(url or "").strip()
+    if not value:
+        return False
+    parsed = urlparse(value)
+    hostname = (parsed.hostname or "").casefold()
+    path = parsed.path.casefold().rstrip("/")
+    is_cda_host = hostname == "cda.pl" or hostname.endswith(".cda.pl")
+    return is_cda_host and (
+        "upload-resume" in path
+        or (hostname == "upload-api.cda.pl" and path == "/uploader")
+    )
+
+
+def _cda_upload_response_error(response: object) -> str | None:
+    """Describe a failed CDA upload response, including initialization HTTP 500."""
+    url = str(getattr(response, "url", ""))
+    status = getattr(response, "status", 0)
+    if (
+        _is_cda_upload_endpoint(url)
+        and isinstance(status, int)
+        and status >= 400
+    ):
+        return f"HTTP {status} from {url}"
+    return None
 
 
 def _clear_cda_stale_uploads(
@@ -339,9 +371,15 @@ def _wait_for_cda_upload_complete(
     timeout_ms: int = UPLOAD_TIMEOUT_MS,
     heartbeat_interval_ms: int = HEARTBEAT_INTERVAL_MS,
     stall_timeout_ms: int = CDA_TRANSFER_STALL_TIMEOUT_MS,
+    start_timeout_ms: int = CDA_TRANSFER_START_TIMEOUT_MS,
 ) -> dict[str, Any]:
     """Wait for publication readiness while reporting CDA progress and speed."""
-    if timeout_ms <= 0 or heartbeat_interval_ms <= 0 or stall_timeout_ms <= 0:
+    if (
+        timeout_ms <= 0
+        or heartbeat_interval_ms <= 0
+        or stall_timeout_ms <= 0
+        or start_timeout_ms <= 0
+    ):
         raise ValueError("CDA upload timeouts and heartbeat interval must be positive")
     started = time.monotonic()
     deadline = started + timeout_ms / 1000
@@ -385,12 +423,19 @@ def _wait_for_cda_upload_complete(
             status.get("percent"),
             status.get("transferred"),
             status.get("total"),
+            status.get("transfer_text"),
         )
         has_transfer_signal = any(value is not None for value in transfer_signal)
         if has_transfer_signal:
             if transfer_signal != last_progress_signature:
                 last_progress_signature = transfer_signal
                 last_progress_at = now
+            elif now - last_progress_at >= stall_timeout_ms / 1000:
+                raise BrowserUploadError(
+                    "CDA upload transfer stalled: the reported progress has not "
+                    f"changed for {now - last_progress_at:.0f} s",
+                    retriable=True,
+                )
         elif last_progress_signature is not None:
             stalled_for = now - last_progress_at
             if stalled_for >= stall_timeout_ms / 1000:
@@ -400,6 +445,12 @@ def _wait_for_cda_upload_complete(
                     "the complete video was received",
                     retriable=True,
                 )
+        elif now - started >= start_timeout_ms / 1000:
+            raise BrowserUploadError(
+                "CDA upload did not start: no upload card or transfer progress "
+                f"appeared within {start_timeout_ms / 1000:.0f} s",
+                retriable=True,
+            )
         if now >= deadline:
             raise BrowserUploadError(
                 "CDA timed out while waiting for transfer completion",
@@ -694,6 +745,7 @@ class CDAUploader(BaseUploader):
                 page,
                 cancel_check=self._raise_if_cancelled,
             )
+            _dismiss_cda_consent_overlay(page)
             size_gib = video_path.stat().st_size / (1024 ** 3)
             logger.info(
                 "cda: session ready (%s); selecting %.2f GiB file: %s",
@@ -711,7 +763,7 @@ class CDAUploader(BaseUploader):
 
             def on_request_failed(request: object) -> None:
                 url = str(getattr(request, "url", ""))
-                if "upload-resume" not in url:
+                if not _is_cda_upload_endpoint(url):
                     return
                 failure = getattr(request, "failure", None)
                 if callable(failure):
@@ -728,20 +780,18 @@ class CDAUploader(BaseUploader):
                 text = str(getattr(message, "text", ""))
                 message_type = str(getattr(message, "type", ""))
                 if (
-                    "upload-resume" in text.lower()
+                    (
+                        "upload-resume" in text.lower()
+                        or "upload-api.cda.pl/uploader" in text.lower()
+                    )
                     and (message_type.lower() == "error" or "cors" in text.lower())
                 ):
                     remember_failure(text)
 
             def on_response(response: object) -> None:
-                url = str(getattr(response, "url", ""))
-                status = getattr(response, "status", 0)
-                if (
-                    "upload-resume" in url
-                    and isinstance(status, int)
-                    and status >= 400
-                ):
-                    remember_failure(f"HTTP {status} from {url}")
+                error = _cda_upload_response_error(response)
+                if error:
+                    remember_failure(error)
 
             page_on = getattr(page, "on", None)
             if callable(page_on):
