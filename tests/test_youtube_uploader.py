@@ -22,6 +22,7 @@ def youtube_config(tmp_path: Path) -> YouTubeConfig:
         token_file=tmp_path / "auth" / "token.json",
         privacy_status="unlisted",
         max_duration_hours=12,
+        max_file_size_gb=256,
         title_limit=100,
         category_id="20",
         captions_language="pl",

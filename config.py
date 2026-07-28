@@ -70,6 +70,7 @@ def expand_environment_variables(
 @dataclass(frozen=True, slots=True)
 class PathsConfig:
     recordings_root: Path
+    ffmpeg: str
     ffprobe: str
     database: Path
     log_directory: Path
@@ -89,6 +90,7 @@ class YouTubeConfig:
     token_file: Path
     privacy_status: str
     max_duration_hours: float
+    max_file_size_gb: float
     title_limit: int
     category_id: str
     captions_language: str
@@ -153,6 +155,18 @@ class MovingConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class SplittingConfig:
+    enabled: bool
+    work_directory_name: str
+    youtube_target_duration_hours: float
+    youtube_target_size_gb: float
+    rumble_target_size_gb: float
+    max_replans: int
+    disk_space_multiplier: float
+    keep_parts_after_success: bool
+
+
+@dataclass(frozen=True, slots=True)
 class CleanupConfig:
     retention_days: int
     dry_run: bool
@@ -173,6 +187,7 @@ class Config:
     browser: BrowserConfig
     metadata: MetadataConfig
     retry: RetryConfig
+    splitting: SplittingConfig
     moving: MovingConfig
     cleanup: CleanupConfig
     logging: LoggingConfig
@@ -214,6 +229,12 @@ def _positive_float(value: Any, location: str) -> float:
 def _positive_int(value: Any, location: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise ConfigError(f"{location} must be a positive integer")
+    return value
+
+
+def _non_negative_int(value: Any, location: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ConfigError(f"{location} must be a non-negative integer")
     return value
 
 
@@ -320,6 +341,7 @@ def config_from_dict(raw: Mapping[str, Any]) -> Config:
     browser = _mapping(_required(root, "browser", "config"), "browser")
     metadata = _mapping(_required(root, "metadata", "config"), "metadata")
     retry = _mapping(_required(root, "retry", "config"), "retry")
+    splitting = _mapping(_required(root, "splitting", "config"), "splitting")
     moving = _mapping(_required(root, "moving", "config"), "moving")
     cleanup = _mapping(_required(root, "cleanup", "config"), "cleanup")
     logging = _mapping(_required(root, "logging", "config"), "logging")
@@ -372,12 +394,47 @@ def config_from_dict(raw: Mapping[str, Any]) -> Config:
             "retry.max_backoff_seconds",
         ),
     )
+    youtube_max_duration = _positive_float(
+        _required(youtube, "max_duration_hours", "platforms.youtube"),
+        "platforms.youtube.max_duration_hours",
+    )
+    youtube_max_size = _positive_float(
+        _required(youtube, "max_file_size_gb", "platforms.youtube"),
+        "platforms.youtube.max_file_size_gb",
+    )
+    youtube_target_duration = _positive_float(
+        _required(
+            splitting,
+            "youtube_target_duration_hours",
+            "splitting",
+        ),
+        "splitting.youtube_target_duration_hours",
+    )
+    youtube_target_size = _positive_float(
+        _required(splitting, "youtube_target_size_gb", "splitting"),
+        "splitting.youtube_target_size_gb",
+    )
+    rumble_target_size = _positive_float(
+        _required(splitting, "rumble_target_size_gb", "splitting"),
+        "splitting.rumble_target_size_gb",
+    )
+    if youtube_target_duration > youtube_max_duration:
+        raise ConfigError(
+            "splitting.youtube_target_duration_hours cannot exceed "
+            "platforms.youtube.max_duration_hours"
+        )
+    if youtube_target_size > youtube_max_size:
+        raise ConfigError(
+            "splitting.youtube_target_size_gb cannot exceed "
+            "platforms.youtube.max_file_size_gb"
+        )
 
-    return Config(
+    config = Config(
         paths=PathsConfig(
             recordings_root=_absolute_path(
                 _required(paths, "recordings_root", "paths"), "paths.recordings_root"
             ),
+            ffmpeg=_string(_required(paths, "ffmpeg", "paths"), "paths.ffmpeg"),
             ffprobe=_string(_required(paths, "ffprobe", "paths"), "paths.ffprobe"),
             database=_path(_required(paths, "database", "paths"), "paths.database"),
             log_directory=_path(
@@ -409,10 +466,8 @@ def config_from_dict(raw: Mapping[str, Any]) -> Config:
                     _required(youtube, "privacy_status", "platforms.youtube"),
                     "platforms.youtube.privacy_status",
                 ),
-                max_duration_hours=_positive_float(
-                    _required(youtube, "max_duration_hours", "platforms.youtube"),
-                    "platforms.youtube.max_duration_hours",
-                ),
+                max_duration_hours=youtube_max_duration,
+                max_file_size_gb=youtube_max_size,
                 title_limit=_positive_int(
                     _required(youtube, "title_limit", "platforms.youtube"),
                     "platforms.youtube.title_limit",
@@ -492,6 +547,31 @@ def config_from_dict(raw: Mapping[str, Any]) -> Config:
             ),
         ),
         retry=retry_config,
+        splitting=SplittingConfig(
+            enabled=_boolean(
+                _required(splitting, "enabled", "splitting"),
+                "splitting.enabled",
+            ),
+            work_directory_name=_string(
+                _required(splitting, "work_directory_name", "splitting"),
+                "splitting.work_directory_name",
+            ),
+            youtube_target_duration_hours=youtube_target_duration,
+            youtube_target_size_gb=youtube_target_size,
+            rumble_target_size_gb=rumble_target_size,
+            max_replans=_non_negative_int(
+                _required(splitting, "max_replans", "splitting"),
+                "splitting.max_replans",
+            ),
+            disk_space_multiplier=_positive_float(
+                _required(splitting, "disk_space_multiplier", "splitting"),
+                "splitting.disk_space_multiplier",
+            ),
+            keep_parts_after_success=_boolean(
+                _required(splitting, "keep_parts_after_success", "splitting"),
+                "splitting.keep_parts_after_success",
+            ),
+        ),
         moving=MovingConfig(
             uploaded_directory_name=_string(
                 _required(moving, "uploaded_directory_name", "moving"),
@@ -518,6 +598,28 @@ def config_from_dict(raw: Mapping[str, Any]) -> Config:
             ),
         ),
     )
+    if config.splitting.disk_space_multiplier <= 1:
+        raise ConfigError("splitting.disk_space_multiplier must be greater than 1")
+    rumble_max_size = config.platforms.rumble.max_file_size_gb
+    if rumble_max_size is None:
+        raise ConfigError(
+            "platforms.rumble.max_file_size_gb is required for multipart planning"
+        )
+    if config.splitting.rumble_target_size_gb > rumble_max_size:
+        raise ConfigError(
+            "splitting.rumble_target_size_gb cannot exceed "
+            "platforms.rumble.max_file_size_gb"
+        )
+    work_name = config.splitting.work_directory_name
+    if (
+        Path(work_name).is_absolute()
+        or len(Path(work_name).parts) != 1
+        or work_name in {".", ".."}
+    ):
+        raise ConfigError(
+            "splitting.work_directory_name must be one safe directory name"
+        )
+    return config
 
 
 def load_config(

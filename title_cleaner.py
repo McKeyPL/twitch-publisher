@@ -144,3 +144,29 @@ def title_from_metadata(
         template,
         max_length,
     )
+
+
+def title_from_metadata_part(
+    metadata: StreamMetadata,
+    template: str,
+    max_length: int | None,
+    part_index: int,
+    total_parts: int,
+) -> str:
+    """Build a multipart title while reserving room for the fixed part suffix."""
+    if (
+        isinstance(part_index, bool)
+        or isinstance(total_parts, bool)
+        or not isinstance(part_index, int)
+        or not isinstance(total_parts, int)
+        or part_index < 1
+        or total_parts < 1
+        or part_index > total_parts
+    ):
+        raise TitleError("Invalid multipart title index/count")
+    suffix = f" (Part {part_index}/{total_parts})"
+    base_limit = None if max_length is None else max_length - len(suffix)
+    if base_limit is not None and base_limit <= 0:
+        raise TitleError("max_length cannot fit the multipart suffix")
+    base = title_from_metadata(metadata, template, base_limit)
+    return base + suffix

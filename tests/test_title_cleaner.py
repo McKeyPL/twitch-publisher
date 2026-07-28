@@ -5,7 +5,13 @@ from datetime import date, datetime
 from pathlib import Path
 
 from meta_parser import StreamMetadata
-from title_cleaner import TitleError, build_final_title, clean_title, title_from_metadata
+from title_cleaner import (
+    TitleError,
+    build_final_title,
+    clean_title,
+    title_from_metadata,
+    title_from_metadata_part,
+)
 
 
 TEMPLATE = "{clean_title} | {channel} | {date_YYYY-MM-DD}"
@@ -82,6 +88,24 @@ class BuildFinalTitleTests(unittest.TestCase):
         self.assertEqual(
             title_from_metadata(metadata, TEMPLATE, 100),
             "Stream mrozopl 2026-07-12 | mrozopl | 2026-07-12",
+        )
+
+    def test_multipart_suffix_is_reserved_inside_platform_limit(self) -> None:
+        metadata = StreamMetadata(
+            channel="mrozopl",
+            title="Very long stream title " * 20,
+            game="Just Chatting",
+            started=datetime(2026, 7, 12, 17, 24, 22),
+            ended=datetime(2026, 7, 12, 20, 36, 32),
+            quality="best",
+            source_path=Path("stream_meta.txt"),
+        )
+
+        result = title_from_metadata_part(metadata, TEMPLATE, 90, 2, 12)
+
+        self.assertEqual(len(result), 90)
+        self.assertTrue(
+            result.endswith(" | mrozopl | 2026-07-12 (Part 2/12)")
         )
 
 

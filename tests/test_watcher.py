@@ -78,6 +78,22 @@ def test_uploaded_directories_are_skipped_at_every_depth(tmp_path: Path) -> None
     assert list(iter_candidate_recordings(tmp_path, "_uploaded")) == [wanted]
 
 
+def test_split_work_directory_is_ignored(tmp_path: Path) -> None:
+    wanted = make_recording(tmp_path / "streamer", "wanted", channel="streamer")
+    make_recording(
+        tmp_path / "streamer" / "_publisher_work" / "hash" / "youtube",
+        "part_001",
+        channel="streamer",
+    )
+    assert list(
+        iter_candidate_recordings(
+            tmp_path,
+            "_uploaded",
+            ["_publisher_work"],
+        )
+    ) == [wanted]
+
+
 def test_video_directly_in_root_does_not_require_folder_channel(tmp_path: Path) -> None:
     make_recording(tmp_path, "root_stream", channel="any_channel")
     results = scan_cycle(tmp_path, FileSizeStabilityTracker(1), "_uploaded", now=0)

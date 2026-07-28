@@ -1,6 +1,7 @@
 # Paths may be overridden by CLI options added by future stages.
 paths:
   recordings_root: '${RECORDINGS_ROOT:-E:\TwitchRecordings}'
+  ffmpeg: ffmpeg
   ffprobe: ffprobe
   database: data/upload_state.sqlite3
   log_directory: logs
@@ -19,6 +20,8 @@ platforms:
     token_file: auth/youtube_token.json
     privacy_status: unlisted
     max_duration_hours: 12
+    # Verified YouTube hard limit: 256 GB or 12 hours, whichever comes first.
+    max_file_size_gb: 256
     title_limit: 100
     category_id: "20" # Gaming
     captions_language: pl
@@ -97,6 +100,20 @@ retry:
   initial_backoff_seconds: 5
   multiplier: 2
   max_backoff_seconds: 60
+
+splitting:
+  enabled: true
+  # Created beside each source recording so lossless parts stay on the same disk.
+  work_directory_name: _publisher_work
+  # Safety margins below the hard YouTube/Rumble limits.
+  youtube_target_duration_hours: 11.75
+  youtube_target_size_gb: 250
+  rumble_target_size_gb: 14.5
+  # If keyframe placement creates an oversized part, shorten and regenerate.
+  max_replans: 3
+  # Free space required relative to source size before splitting starts.
+  disk_space_multiplier: 1.05
+  keep_parts_after_success: false
 
 moving:
   uploaded_directory_name: _uploaded

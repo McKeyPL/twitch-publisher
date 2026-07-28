@@ -445,6 +445,7 @@ def run_cycle(
         config.paths.recordings_root,
         tracker,
         config.moving.uploaded_directory_name,
+        excluded_directory_names=[config.splitting.work_directory_name],
         now=now,
     )
     process_readiness_results(

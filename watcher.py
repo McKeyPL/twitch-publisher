@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 
 from duration_check import (
@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 def iter_candidate_recordings(
     recordings_root: Path,
     uploaded_directory_name: str,
+    excluded_directory_names: Iterable[str] = (),
 ) -> Iterator[Path]:
     """Yield MKV files recursively while skipping uploaded directories."""
     root = Path(recordings_root)
@@ -29,13 +30,20 @@ def iter_candidate_recordings(
     if not root.is_dir():
         return
 
+    excluded_names = {
+        name.strip().casefold()
+        for name in excluded_directory_names
+        if name.strip()
+    }
+    excluded_names.add(uploaded_name)
     candidates = (
         path
         for path in root.rglob("*")
         if path.is_file()
         and path.suffix.casefold() == ".mkv"
-        and uploaded_name
-        not in {part.casefold() for part in path.relative_to(root).parts[:-1]}
+        and excluded_names.isdisjoint(
+            part.casefold() for part in path.relative_to(root).parts[:-1]
+        )
     )
     yield from sorted(candidates, key=lambda path: str(path).casefold())
 
@@ -50,13 +58,18 @@ def scan_cycle(
     tracker: FileSizeStabilityTracker,
     uploaded_directory_name: str,
     *,
+    excluded_directory_names: Iterable[str] = (),
     expected_channel: str | None = None,
     now: float | None = None,
 ) -> list[ReadinessResult]:
     """Check every candidate once and include non-ready results."""
     root = Path(recordings_root)
     results: list[ReadinessResult] = []
-    for video_path in iter_candidate_recordings(root, uploaded_directory_name):
+    for video_path in iter_candidate_recordings(
+        root,
+        uploaded_directory_name,
+        excluded_directory_names,
+    ):
         channel = expected_channel
         if channel is None:
             channel = _channel_for_video(video_path, root)

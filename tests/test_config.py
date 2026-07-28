@@ -71,6 +71,7 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(config.platforms.youtube.captions_language, "pl")
         self.assertEqual(config.platforms.youtube.captions_name, "Twitch Chat")
         self.assertEqual(config.platforms.youtube.daily_upload_limit, 100)
+        self.assertEqual(config.platforms.youtube.max_file_size_gb, 256.0)
         self.assertEqual(config.platforms.rumble.primary_category, "Gaming")
         self.assertEqual(config.platforms.rumble.title_limit, 90)
         self.assertEqual(config.platforms.rumble.max_file_size_gb, 15.0)
@@ -81,6 +82,11 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertTrue(config.platforms.cda.form_options["confirm_rights"])
         self.assertFalse(config.platforms.cda.form_options["contains_violence"])
         self.assertFalse(hasattr(config.platforms.youtube, "retry"))
+        self.assertEqual(config.paths.ffmpeg, "ffmpeg")
+        self.assertTrue(config.splitting.enabled)
+        self.assertEqual(config.splitting.youtube_target_duration_hours, 11.75)
+        self.assertEqual(config.splitting.youtube_target_size_gb, 250.0)
+        self.assertEqual(config.splitting.rumble_target_size_gb, 14.5)
 
     def test_loads_rumble_license_from_environment(self) -> None:
         with patch.dict(
@@ -149,6 +155,30 @@ class ConfigValidationTests(unittest.TestCase):
                 raw = valid_raw_config()
                 raw["platforms"]["youtube"]["daily_upload_limit"] = invalid_value
                 with self.assertRaisesRegex(ConfigError, "daily_upload_limit"):
+                    config_from_dict(raw)
+
+    def test_rejects_split_targets_above_platform_hard_limits(self) -> None:
+        raw = valid_raw_config()
+        raw["splitting"]["youtube_target_duration_hours"] = 12.1
+        with self.assertRaisesRegex(ConfigError, "youtube_target_duration_hours"):
+            config_from_dict(raw)
+
+        raw = valid_raw_config()
+        raw["splitting"]["youtube_target_size_gb"] = 257
+        with self.assertRaisesRegex(ConfigError, "youtube_target_size_gb"):
+            config_from_dict(raw)
+
+        raw = valid_raw_config()
+        raw["splitting"]["rumble_target_size_gb"] = 15.1
+        with self.assertRaisesRegex(ConfigError, "rumble_target_size_gb"):
+            config_from_dict(raw)
+
+    def test_rejects_unsafe_split_work_directory(self) -> None:
+        for invalid in ("../work", r"C:\work", "."):
+            with self.subTest(value=invalid):
+                raw = valid_raw_config()
+                raw["splitting"]["work_directory_name"] = invalid
+                with self.assertRaisesRegex(ConfigError, "work_directory_name"):
                     config_from_dict(raw)
 
     def test_rejects_relative_recordings_root(self) -> None:
