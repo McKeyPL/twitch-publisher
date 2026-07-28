@@ -342,10 +342,14 @@ $resolvedRoot = (Resolve-Path -LiteralPath $RootPath).Path
 $resolvedDatabase = [System.IO.Path]::GetFullPath($DatabasePath)
 
 if (-not [string]::IsNullOrWhiteSpace($VideoPath)) {
-    $singleVideo = Get-Item -LiteralPath $VideoPath
-    if ($singleVideo.Extension -ine ".mkv") {
+    if (-not (Test-Path -LiteralPath $VideoPath -PathType Leaf)) {
+        throw "-VideoPath does not point to an existing file: $VideoPath"
+    }
+    $resolvedVideoPath = (Resolve-Path -LiteralPath $VideoPath).Path
+    if ([System.IO.Path]::GetExtension($resolvedVideoPath) -ine ".mkv") {
         throw "-VideoPath must point to an MKV file: $VideoPath"
     }
+    $singleVideo = Get-Item -LiteralPath $resolvedVideoPath -Force
     $videos = @($singleVideo)
 }
 else {
