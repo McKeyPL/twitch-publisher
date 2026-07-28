@@ -28,7 +28,9 @@ twitch-publisher/
 |-- title_cleaner.py            # title normalization and limits
 |-- recording_name_normalizer.py # legacy CDA-safe MKV/SRT/TXT renaming
 |-- duration_check.py           # file stability and ffprobe
-|-- state.py                    # SQLite/WAL, upload status, quota
+|-- srt_splitter.py             # UTF-8 SRT parsing and boundary-aligned parts
+|-- media_splitter.py           # lossless FFmpeg parts, limits, manifest/replan
+|-- state.py                    # SQLite/WAL, parent/part status, quota
 |-- mover.py                    # safe movement into _uploaded
 |-- cleanup.py                  # separate manual dry-run-first CLI
 |-- normalize-recording-names.ps1 # safe filename cleanup with SQLite migration
@@ -48,11 +50,17 @@ twitch-publisher/
 - `meta_parser.py` owns metadata format and domain validation.
 - `duration_check.py` qualifies completed recordings and reads container duration
   through `ffprobe`.
+- `srt_splitter.py` clips chat cues to actual FFmpeg segment boundaries and
+  resets each part to a zero-based timeline.
+- `media_splitter.py` owns lossless stream-copy segmentation, disk preflight,
+  manifest reuse, hard-limit verification, replanning, and cancellation.
 - `recording_name_normalizer.py` applies the legacy CDA filename profile and
   atomically migrates existing SQLite statuses after renaming a recording set.
-- `state.py` is the only module that writes upload status and local quota usage.
+- `state.py` is the only module that writes parent/part upload status and local
+  quota usage.
 - `main.py` composes dependencies, retains the tracker between cycles, and
-  isolates exceptions per recording and per platform.
+  isolates exceptions per recording/platform/part. YouTube and Rumble use
+  independent split plans.
 - `uploaders/rumble.py` does not treat the visible second step as transfer
   completion. It waits for the `#video[]` token set after all chunks are uploaded
   and merged.

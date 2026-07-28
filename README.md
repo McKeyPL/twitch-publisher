@@ -150,13 +150,74 @@ for transient HTTP/network failures.
 
 The application reserves local quota before upload and captions insertion. Local
 counters protect the configured budget, while Google Cloud Console remains the
-authoritative source. Counters reset using Pacific Time calendar days. Videos over
-12 hours are skipped only for YouTube.
+authoritative source. Counters reset using Pacific Time calendar days.
 
 Non-empty SRT files up to the configured size limit are uploaded through
-`captions.insert`. If a channel's playlist ID is empty, the uploader creates a
-playlist and logs the environment variable that must be saved to avoid creating a
-duplicate playlist on a later process start.
+`captions.insert`. SRT input must be valid UTF-8 SubRip. The OAuth token includes
+both `youtube.upload` and `youtube.force-ssl`, the latter being required for
+captions and playlists. Expired tokens are refreshed and persisted; an unusable
+token falls back to the interactive desktop-app OAuth flow.
+
+A successful video is never uploaded again just because captions or playlist
+insertion failed. Source files stay in place and the next watcher cycle retries
+only the missing finalization operation. If a channel's playlist ID is empty, the
+uploader creates a playlist and logs the environment variable that must be saved
+to avoid creating a duplicate playlist on a later process start.
+
+## Oversized recordings and lossless parts
+
+Splitting is enabled by default:
+
+- YouTube's hard limits are 12 hours and 256 GB, whichever is reached first.
+  Parts target 11 hours 45 minutes and 250 GB.
+- Rumble's configured hard limit is 15 GB. Parts target 14.5 GB.
+- CDA continues to receive the original recording.
+
+YouTube and Rumble use separate plans. For example, a 10-hour, 20 GB recording is
+uploaded once to YouTube but split only for Rumble. FFmpeg uses stream copy
+(`-c copy`), so video/audio are not re-encoded. Segment boundaries move to valid
+keyframes; the publisher reads FFmpeg's actual CSV boundaries instead of assuming
+the requested time.
+
+Chat captions are split from those actual boundaries. A cue crossing a boundary
+is clipped into both neighboring parts, timestamps are reset to zero, UTF-8 and
+emoji text are preserved, and indexes are regenerated. Each YouTube part gets its
+own matching caption track and playlist entry.
+
+The temporary parts and `manifest.json` are stored beside the source under:
+
+```text
+<channel>/_publisher_work/<source-signature>/<platform>/
+```
+
+The watcher ignores this directory. SQLite tracks every part separately, so after
+a restart only failed or unfinished parts are retried. Before splitting, the
+publisher requires free space approximately equal to 105% of the source size.
+Every generated part is checked against hard duration/size limits. If keyframe
+placement creates an oversized part, the target duration is reduced and the plan
+is regenerated up to `splitting.max_replans`.
+
+The original MKV/SRT/TXT set is moved to `_uploaded` only after all required
+platforms and all parts are `SUCCESS` or a legal `SKIPPED`. Work parts are then
+removed unless `splitting.keep_parts_after_success` is enabled.
+
+Relevant configuration:
+
+```yaml
+paths:
+  ffmpeg: ffmpeg
+  ffprobe: ffprobe
+
+splitting:
+  enabled: true
+  work_directory_name: _publisher_work
+  youtube_target_duration_hours: 11.75
+  youtube_target_size_gb: 250
+  rumble_target_size_gb: 14.5
+  max_replans: 3
+  disk_space_multiplier: 1.05
+  keep_parts_after_success: false
+```
 
 ## CDA and Rumble authentication
 
@@ -209,11 +270,13 @@ confirms ownership and terms, limits titles to a safe 90 characters, enforces th
 configured 15 GB file limit, and waits for the server-side upload token after
 chunk transfer and merge before submitting the final form.
 
-If Rumble explicitly returns `The video file has no video track`, or the file is
-over Rumble's configured 15 GB limit, the recording is marked `SKIPPED` for Rumble
-instead of being retried forever. Existing size-limit failures are migrated to
-`SKIPPED` on the next cycle. These terminal skips count as processed for file
-movement after every other enabled platform has reached `SUCCESS` or `SKIPPED`.
+If a recording is over Rumble's configured 15 GB limit, it is losslessly split
+before the browser uploader is called. Old size-limit `FAILED`/`SKIPPED` rows are
+reopened automatically when multipart support can process the source. If Rumble
+explicitly returns `The video file has no video track`, that recording or part is
+marked `SKIPPED` instead of being retried forever. Legal skips count as processed
+for file movement after every other enabled platform has reached `SUCCESS` or
+`SKIPPED`.
 
 ## Debugging and cancellation
 
@@ -294,6 +357,14 @@ Set `normalize_filename: false` only to disable this CDA compatibility step.
 .venv/bin/python -m pip install -r requirements-dev.txt
 .venv/bin/python -m pytest -q
 ```
+
+The suite mocks Google and browser services, but exercises cached-token loading,
+token refresh and persistence, missing-scope/refresh-error OAuth fallback,
+`captions.insert` request/response handling, caption-only retry, per-part restart
+behavior, SRT boundary clipping, manifest reuse, and oversized-part replanning.
+An additional local verification was performed against a real FFmpeg executable
+using a generated Matroska source; the resulting CSV boundaries and manifest
+reuse were validated.
 
 ## Manual GitHub releases
 

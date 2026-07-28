@@ -13,5 +13,6 @@ data/
 logs/
 playwright-report/
 test-results/
+_publisher_work/
 *.zip
 *.7z

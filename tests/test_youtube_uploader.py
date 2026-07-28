@@ -11,7 +11,7 @@ from googleapiclient.errors import HttpError
 
 from config import RetryConfig, YouTubeConfig
 from state import StateStore
-from uploaders.youtube import YouTubeUploader, _pacific_quota_window
+from uploaders.youtube import SCOPES, YouTubeUploader, _pacific_quota_window
 
 
 @pytest.fixture
@@ -122,9 +122,14 @@ def test_uses_valid_cached_oauth_token_without_interactive_flow(
 
 
 def uploader_module_scopes() -> list[str]:
-    from uploaders.youtube import SCOPES
-
     return SCOPES
+
+
+def test_oauth_scopes_cover_upload_captions_and_playlists() -> None:
+    assert SCOPES == [
+        "https://www.googleapis.com/auth/youtube.upload",
+        "https://www.googleapis.com/auth/youtube.force-ssl",
+    ]
 
 
 def test_refreshes_expired_token_and_persists_it(
@@ -385,6 +390,32 @@ def test_caption_response_with_failed_status_is_not_marked_as_uploaded(
     assert result.success is False
     assert result.status == "failed"
     assert "processingFailed" in (result.error_message or "")
+
+
+def test_caption_exists_conflict_is_idempotent_success(
+    tmp_path: Path,
+    youtube_config: YouTubeConfig,
+    retry_config: RetryConfig,
+) -> None:
+    srt = tmp_path / "stream_chat.srt"
+    srt.write_text("1\n00:00:01,000 --> 00:00:02,000\nChat\n", encoding="utf-8")
+    conflict = HttpError(
+        httplib2.Response({"status": "409"}),
+        b'{"error":{"errors":[{"reason":"captionExists"}]}}',
+    )
+    service = MagicMock()
+    request = MagicMock()
+    request.execute.side_effect = conflict
+    service.captions.return_value.insert.return_value = request
+
+    with StateStore(tmp_path / "state.sqlite3") as store:
+        uploader = YouTubeUploader(youtube_config, retry_config, store)
+        uploader._service = service
+        with patch("uploaders.youtube.MediaFileUpload"):
+            result = uploader.upload_captions("existing-video", srt)
+
+    assert result.success is True
+    assert result.status == "existing"
 
 
 def test_invalid_utf8_srt_is_not_eligible_for_upload(
