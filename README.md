@@ -244,6 +244,32 @@ Windows equivalent:
 Only recording sets inside `<recordings_root>/<channel>/_uploaded` are eligible.
 Retention age is calculated from the MKV modification time.
 
+## Normalizing recording filenames on Windows
+
+`normalize-recording-names.ps1` removes chat-command suffixes, emoji, diacritics,
+mojibake, and punctuation from recording names outside `_uploaded`. It gives the
+MKV, optional chat SRT, and metadata TXT one identical cleaned base name. The
+default mode is a read-only preview:
+
+```powershell
+.\normalize-recording-names.ps1 -RootPath "E:\TwitchRecordings"
+```
+
+Test one recording first:
+
+```powershell
+.\normalize-recording-names.ps1 `
+  -RootPath "E:\TwitchRecordings" `
+  -VideoPath "E:\TwitchRecordings\mrozopl\20260714_170854_mrozopl_[Daj Sobie Szansę] Arduino, emulujemy pilot radiowy 📻 !dss.mkv"
+```
+
+Stop Twitch Publisher before applying changes, then add `-Apply`. The script also
+migrates matching `upload_status.video_path` rows in `data/upload_state.sqlite3`,
+preventing successful YouTube or Rumble uploads from being duplicated under the
+new filename. File changes are rolled back if SQLite migration fails. Use
+`-AllowMissingDatabase` only on an installation that genuinely has no existing
+state database.
+
 ## Tests
 
 ```bash

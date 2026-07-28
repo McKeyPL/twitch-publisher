@@ -30,6 +30,7 @@ twitch-publisher/
 |-- state.py                    # SQLite/WAL, upload status, quota
 |-- mover.py                    # safe movement into _uploaded
 |-- cleanup.py                  # separate manual dry-run-first CLI
+|-- normalize-recording-names.ps1 # safe filename cleanup with SQLite migration
 |-- main.py                     # application orchestration
 |-- start.ps1                   # manual Windows launcher and restart loop
 |-- start.sh                    # manual Linux launcher and restart loop
