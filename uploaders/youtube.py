@@ -6,6 +6,7 @@ import json
 import logging
 import re
 import threading
+from dataclasses import dataclass
 from datetime import datetime, time as datetime_time, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -34,6 +35,20 @@ SCOPES = [
 RETRIABLE_HTTP_STATUS_CODES = {500, 502, 503, 504}
 VIDEO_CHUNK_SIZE = 50 * 1024 * 1024
 PACIFIC_TIME = ZoneInfo("America/Los_Angeles")
+SRT_TIMECODE_RE = re.compile(
+    r"(?m)^\d{2,}:\d{2}:\d{2},\d{3}\s+-->\s+"
+    r"\d{2,}:\d{2}:\d{2},\d{3}(?:\s+.*)?$"
+)
+
+
+@dataclass(frozen=True, slots=True)
+class CaptionUploadResult:
+    """Outcome of a captions.insert call for an already uploaded video."""
+
+    success: bool
+    caption_id: str | None = None
+    status: str | None = None
+    error_message: str | None = None
 
 
 def _pacific_quota_window(now: datetime | None = None) -> tuple[str, datetime]:
@@ -163,7 +178,143 @@ class YouTubeUploader(BaseUploader):
             )
             logger.warning(warning)
             return None, warning
+        try:
+            text = srt.read_text(encoding="utf-8-sig")
+        except UnicodeError as exc:
+            warning = f"SRT {srt} is not valid UTF-8 and was skipped: {exc}"
+            logger.warning(warning)
+            return None, warning
+        if not SRT_TIMECODE_RE.search(text):
+            warning = f"SRT {srt} has no valid SubRip timecode and was skipped"
+            logger.warning(warning)
+            return None, warning
         return srt, None
+
+    def captions_required(self, srt_path: Path | None) -> bool:
+        """Return whether this SRT is eligible and should be finalized on YouTube."""
+        try:
+            usable_srt, _ = self._prepare_srt(srt_path)
+        except OSError as exc:
+            logger.warning("Cannot inspect SRT %s: %s", srt_path, exc)
+            return False
+        return usable_srt is not None
+
+    def _reserve_caption_quota(self) -> tuple[bool, str | None]:
+        period, next_reset = _pacific_quota_window()
+        bucket = "youtube_general"
+        cost = self.config.captions_quota_units
+        limit = self.config.daily_quota_units
+        reserved, usage = self.state_store.try_reserve_quota(
+            bucket,
+            period,
+            cost,
+            limit,
+        )
+        if not reserved:
+            message = (
+                "Local YouTube quota limit for captions.insert would be exceeded: "
+                f"used {usage}/{limit}, operation requires {cost}. "
+                f"Next reset at Pacific Time midnight: {next_reset.isoformat()} "
+                f"({next_reset.astimezone(timezone.utc).isoformat()} UTC)."
+            )
+            logger.error(message)
+            return False, message
+        logger.info(
+            "YouTube: reserved %d for captions.insert (%d/%d, PT period %s)",
+            cost,
+            usage,
+            limit,
+            period,
+        )
+        return True, None
+
+    def upload_captions(
+        self,
+        platform_video_id: str,
+        srt_path: Path,
+        *,
+        reserve_quota: bool = True,
+    ) -> CaptionUploadResult:
+        """Upload SRT to an existing video without uploading the video again."""
+        video_id = platform_video_id.strip()
+        if not video_id:
+            return CaptionUploadResult(False, error_message="YouTube video ID is empty")
+
+        try:
+            usable_srt, warning = self._prepare_srt(srt_path)
+        except OSError as exc:
+            return CaptionUploadResult(False, error_message=str(exc))
+        if usable_srt is None:
+            return CaptionUploadResult(False, error_message=warning or "SRT is not eligible")
+
+        if reserve_quota:
+            quota_ok, quota_error = self._reserve_caption_quota()
+            if not quota_ok:
+                return CaptionUploadResult(False, error_message=quota_error)
+
+        try:
+            captions_media = MediaFileUpload(
+                str(usable_srt),
+                mimetype="application/octet-stream",
+                resumable=False,
+            )
+            captions_request = self._get_service().captions().insert(
+                part="snippet",
+                body={
+                    "snippet": {
+                        "videoId": video_id,
+                        "language": self.config.captions_language,
+                        "name": self.config.captions_name,
+                        "isDraft": False,
+                    }
+                },
+                media_body=captions_media,
+            )
+            response = self._with_retry(
+                captions_request.execute,
+                operation_name=f"adding captions to {video_id}",
+                should_retry=_is_retriable_error,
+            )
+        except HttpError as exc:
+            if int(getattr(exc.resp, "status", 0)) == 409 and _youtube_error_reason(exc) == "captionExists":
+                logger.info(
+                    "YouTube already has the requested caption track for %s; "
+                    "treating it as completed",
+                    video_id,
+                )
+                return CaptionUploadResult(True, status="existing")
+            message = _friendly_youtube_error(exc)
+            logger.exception("Could not add captions to %s: %s", video_id, message)
+            return CaptionUploadResult(False, error_message=message)
+        except Exception as exc:
+            message = _friendly_youtube_error(exc)
+            logger.exception("Could not add captions to %s: %s", video_id, message)
+            return CaptionUploadResult(False, error_message=message)
+
+        snippet = response.get("snippet", {}) if isinstance(response, dict) else {}
+        status = snippet.get("status")
+        if status == "failed":
+            reason = snippet.get("failureReason") or "unknown failure"
+            return CaptionUploadResult(
+                False,
+                caption_id=response.get("id"),
+                status=status,
+                error_message=f"YouTube rejected the caption track: {reason}",
+            )
+        caption_id = response.get("id") if isinstance(response, dict) else None
+        if not caption_id:
+            return CaptionUploadResult(
+                False,
+                status=status,
+                error_message="YouTube returned no caption track ID",
+            )
+        logger.info(
+            "YouTube accepted captions %s for %s (status=%s)",
+            caption_id,
+            video_id,
+            status or "not returned",
+        )
+        return CaptionUploadResult(True, caption_id=caption_id, status=status)
 
     def _reserve_quota(self, include_captions: bool) -> tuple[bool, str | None]:
         period, next_reset = _pacific_quota_window()
@@ -286,33 +437,17 @@ class YouTubeUploader(BaseUploader):
         captions_uploaded = False
         captions_error = captions_warning
         if usable_srt is not None:
-            try:
-                captions_media = MediaFileUpload(
-                    str(usable_srt),
-                    mimetype="application/octet-stream",
-                    resumable=False,
+            caption_result = self.upload_captions(
+                video_id,
+                usable_srt,
+                reserve_quota=False,
+            )
+            captions_uploaded = caption_result.success
+            if not caption_result.success:
+                captions_error = (
+                    "Video uploaded, but captions were not added: "
+                    f"{caption_result.error_message or 'unknown error'}"
                 )
-                captions_request = self._get_service().captions().insert(
-                    part="snippet",
-                    body={
-                        "snippet": {
-                            "videoId": video_id,
-                            "language": self.config.captions_language,
-                            "name": self.config.captions_name,
-                            "isDraft": False,
-                        }
-                    },
-                    media_body=captions_media,
-                )
-                self._with_retry(
-                    captions_request.execute,
-                    operation_name=f"adding captions to {video_id}",
-                    should_retry=_is_retriable_error,
-                )
-                captions_uploaded = True
-            except Exception as exc:
-                captions_error = f"Video uploaded, but captions were not added: {_friendly_youtube_error(exc)}"
-                logger.exception(captions_error)
 
         logger.info("YouTube upload completed: %s", video_url)
         return UploadResult(

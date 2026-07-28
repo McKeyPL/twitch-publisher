@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import httplib2
 import pytest
+from google.auth.exceptions import RefreshError
 from googleapiclient.errors import HttpError
 
 from config import RetryConfig, YouTubeConfig
@@ -80,6 +81,125 @@ def test_service_is_built_lazily_with_mocked_discovery_build(
         credentials=credentials.return_value,
         cache_discovery=False,
     )
+
+
+def _cached_credentials(*, valid: bool = True, expired: bool = False) -> MagicMock:
+    credentials = MagicMock()
+    credentials.valid = valid
+    credentials.expired = expired
+    credentials.refresh_token = "refresh-token"
+    credentials.has_scopes.return_value = True
+    credentials.to_json.return_value = '{"token":"saved"}'
+    return credentials
+
+
+def test_uses_valid_cached_oauth_token_without_interactive_flow(
+    tmp_path: Path,
+    youtube_config: YouTubeConfig,
+    retry_config: RetryConfig,
+) -> None:
+    youtube_config.token_file.parent.mkdir(parents=True)
+    youtube_config.token_file.write_text("{}", encoding="utf-8")
+    credentials = _cached_credentials()
+
+    with StateStore(tmp_path / "state.sqlite3") as store:
+        uploader = YouTubeUploader(youtube_config, retry_config, store)
+        with (
+            patch(
+                "uploaders.youtube.Credentials.from_authorized_user_file",
+                return_value=credentials,
+            ) as load_token,
+            patch(
+                "uploaders.youtube.InstalledAppFlow.from_client_secrets_file"
+            ) as flow,
+        ):
+            assert uploader._get_credentials() is credentials
+
+    load_token.assert_called_once_with(youtube_config.token_file, uploader_module_scopes())
+    flow.assert_not_called()
+    assert youtube_config.token_file.read_text(encoding="utf-8") == '{"token":"saved"}'
+
+
+def uploader_module_scopes() -> list[str]:
+    from uploaders.youtube import SCOPES
+
+    return SCOPES
+
+
+def test_refreshes_expired_token_and_persists_it(
+    tmp_path: Path,
+    youtube_config: YouTubeConfig,
+    retry_config: RetryConfig,
+) -> None:
+    youtube_config.token_file.parent.mkdir(parents=True)
+    youtube_config.token_file.write_text("{}", encoding="utf-8")
+    credentials = _cached_credentials(valid=False, expired=True)
+
+    def refreshed(_request: object) -> None:
+        credentials.expired = False
+        credentials.valid = True
+
+    credentials.refresh.side_effect = refreshed
+    with StateStore(tmp_path / "state.sqlite3") as store:
+        uploader = YouTubeUploader(youtube_config, retry_config, store)
+        with (
+            patch(
+                "uploaders.youtube.Credentials.from_authorized_user_file",
+                return_value=credentials,
+            ),
+            patch("uploaders.youtube.Request", return_value=MagicMock()) as request,
+            patch(
+                "uploaders.youtube.InstalledAppFlow.from_client_secrets_file"
+            ) as flow,
+        ):
+            assert uploader._get_credentials() is credentials
+
+    credentials.refresh.assert_called_once_with(request.return_value)
+    flow.assert_not_called()
+    assert youtube_config.token_file.read_text(encoding="utf-8") == '{"token":"saved"}'
+
+
+@pytest.mark.parametrize("failure_mode", ["refresh_error", "missing_scope"])
+def test_falls_back_to_interactive_oauth_when_cached_token_cannot_be_used(
+    tmp_path: Path,
+    youtube_config: YouTubeConfig,
+    retry_config: RetryConfig,
+    failure_mode: str,
+) -> None:
+    youtube_config.token_file.parent.mkdir(parents=True)
+    youtube_config.token_file.write_text("{}", encoding="utf-8")
+    credentials = _cached_credentials(
+        valid=failure_mode == "missing_scope",
+        expired=failure_mode == "refresh_error",
+    )
+    if failure_mode == "refresh_error":
+        credentials.refresh.side_effect = RefreshError("refresh failed")
+    else:
+        credentials.has_scopes.return_value = False
+    authorized = _cached_credentials()
+    flow = MagicMock()
+    flow.run_local_server.return_value = authorized
+
+    with StateStore(tmp_path / "state.sqlite3") as store:
+        uploader = YouTubeUploader(youtube_config, retry_config, store)
+        with (
+            patch(
+                "uploaders.youtube.Credentials.from_authorized_user_file",
+                return_value=credentials,
+            ),
+            patch(
+                "uploaders.youtube.InstalledAppFlow.from_client_secrets_file",
+                return_value=flow,
+            ) as create_flow,
+        ):
+            assert uploader._get_credentials() is authorized
+
+    create_flow.assert_called_once_with(
+        str(youtube_config.client_secrets_file),
+        uploader_module_scopes(),
+    )
+    flow.run_local_server.assert_called_once_with(port=0, open_browser=True)
+    assert youtube_config.token_file.read_text(encoding="utf-8") == '{"token":"saved"}'
 
 
 def test_successful_resumable_upload(
@@ -203,6 +323,80 @@ def test_uploads_captions_after_video(
     caption_body = service.captions.return_value.insert.call_args.kwargs["body"]
     assert caption_body["snippet"]["videoId"] == "with-captions"
     assert caption_body["snippet"]["language"] == "pl"
+
+
+def test_retries_only_captions_for_an_existing_video_and_reserves_quota(
+    tmp_path: Path,
+    youtube_config: YouTubeConfig,
+    retry_config: RetryConfig,
+) -> None:
+    srt = tmp_path / "stream_chat.srt"
+    srt.write_text("1\n00:00:01,000 --> 00:00:02,000\nChat\n", encoding="utf-8")
+    service = MagicMock()
+    request = MagicMock()
+    request.execute.return_value = {
+        "id": "caption-id",
+        "snippet": {"status": "serving"},
+    }
+    service.captions.return_value.insert.return_value = request
+
+    with StateStore(tmp_path / "state.sqlite3") as store:
+        uploader = YouTubeUploader(youtube_config, retry_config, store)
+        uploader._service = service
+        with patch("uploaders.youtube.MediaFileUpload") as media_upload:
+            result = uploader.upload_captions("existing-video", srt)
+
+        period, _ = _pacific_quota_window()
+        assert store.get_quota_usage("youtube_general", period) == 400
+        assert store.get_quota_usage("youtube_videos_insert", period) == 0
+
+    assert result.success is True
+    assert result.caption_id == "caption-id"
+    assert result.status == "serving"
+    media_upload.assert_called_once_with(
+        str(srt),
+        mimetype="application/octet-stream",
+        resumable=False,
+    )
+
+
+def test_caption_response_with_failed_status_is_not_marked_as_uploaded(
+    tmp_path: Path,
+    youtube_config: YouTubeConfig,
+    retry_config: RetryConfig,
+) -> None:
+    srt = tmp_path / "stream_chat.srt"
+    srt.write_text("1\n00:00:01,000 --> 00:00:02,000\nChat\n", encoding="utf-8")
+    service = MagicMock()
+    request = MagicMock()
+    request.execute.return_value = {
+        "id": "caption-id",
+        "snippet": {"status": "failed", "failureReason": "processingFailed"},
+    }
+    service.captions.return_value.insert.return_value = request
+
+    with StateStore(tmp_path / "state.sqlite3") as store:
+        uploader = YouTubeUploader(youtube_config, retry_config, store)
+        uploader._service = service
+        with patch("uploaders.youtube.MediaFileUpload"):
+            result = uploader.upload_captions("existing-video", srt)
+
+    assert result.success is False
+    assert result.status == "failed"
+    assert "processingFailed" in (result.error_message or "")
+
+
+def test_invalid_utf8_srt_is_not_eligible_for_upload(
+    tmp_path: Path,
+    youtube_config: YouTubeConfig,
+    retry_config: RetryConfig,
+) -> None:
+    srt = tmp_path / "invalid.srt"
+    srt.write_bytes(b"\xff\xfe\x00\x01")
+
+    with StateStore(tmp_path / "state.sqlite3") as store:
+        uploader = YouTubeUploader(youtube_config, retry_config, store)
+        assert uploader.captions_required(srt) is False
 
 
 def test_creates_playlist_when_identifier_is_empty(

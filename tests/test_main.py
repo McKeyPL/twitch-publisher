@@ -49,6 +49,31 @@ class FakeUploader(BaseUploader):
         return True
 
 
+class CaptionRetryYouTubeUploader(FakeUploader):
+    def __init__(self, retry_config) -> None:
+        super().__init__(
+            "youtube",
+            retry_config,
+            result=UploadResult(
+                True,
+                "youtube-id",
+                "https://youtube.test/id",
+                error_message="captions failed",
+                captions_uploaded=False,
+            ),
+        )
+        self.caption_attempts = 0
+
+    def captions_required(self, srt_path: Path | None) -> bool:
+        return bool(srt_path and Path(srt_path).stat().st_size)
+
+    def upload_captions(self, platform_video_id: str, srt_path: Path):
+        from uploaders.youtube import CaptionUploadResult
+
+        self.caption_attempts += 1
+        return CaptionUploadResult(True, caption_id="caption-id", status="serving")
+
+
 def config_for(tmp_path: Path, monkeypatch) -> Config:
     monkeypatch.setenv("YOUTUBE_CLIENT_SECRETS_FILE", "credentials.json")
     config = load_config(Path(__file__).parents[1] / "config.yaml")
@@ -183,6 +208,46 @@ def test_duration_limit_skips_only_limited_platform(tmp_path: Path, monkeypatch)
         assert store.get_status(video, "rumble").status is UploadStatus.SUCCESS
 
     assert uploaders["youtube"].uploaded == []
+    assert not video.exists()
+
+
+def test_successful_video_retries_only_missing_captions_on_next_cycle(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = config_for(tmp_path, monkeypatch)
+    video, metadata = make_recording(config.paths.recordings_root)
+    youtube = CaptionRetryYouTubeUploader(config.retry)
+
+    with StateStore(config.paths.database) as store:
+        process_ready_recording(
+            video,
+            metadata,
+            3600,
+            config,
+            store,
+            {"youtube": youtube},
+        )
+        first = store.get_status(video, "youtube")
+        assert first is not None
+        assert first.status is UploadStatus.SUCCESS
+        assert first.captions_uploaded is False
+        assert video.is_file()
+
+        process_ready_recording(
+            video,
+            metadata,
+            3600,
+            config,
+            store,
+            {"youtube": youtube},
+        )
+        second = store.get_status(video, "youtube")
+        assert second is not None
+        assert second.captions_uploaded is True
+
+    assert youtube.uploaded == [video]
+    assert youtube.caption_attempts == 1
     assert not video.exists()
 
 

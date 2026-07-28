@@ -176,6 +176,68 @@ def _mark_exception_failed(
     logger.exception("%s: %s", platform, message)
 
 
+def _youtube_finalization_complete(
+    video_path: Path,
+    metadata: StreamMetadata,
+    srt_path: Path,
+    config: Config,
+    state_store: StateStore,
+    uploader: BaseUploader,
+    *,
+    retry_missing: bool,
+) -> bool:
+    """Finish captions/playlist without ever re-uploading a successful video."""
+    record = state_store.get_status(video_path, "youtube")
+    if record is None or record.status is not UploadStatus.SUCCESS:
+        return False
+    video_id = record.platform_video_id or ""
+    if not video_id:
+        logger.error(
+            "youtube: SUCCESS has no video ID; captions and playlist cannot be finalized"
+        )
+        return False
+
+    captions_required = getattr(uploader, "captions_required", None)
+    upload_captions = getattr(uploader, "upload_captions", None)
+    needs_captions = bool(
+        callable(captions_required) and captions_required(srt_path)
+    )
+    if needs_captions and not record.captions_uploaded:
+        if not retry_missing:
+            return False
+        if not callable(upload_captions):
+            logger.error("youtube: uploader cannot retry missing captions")
+            return False
+        caption_result = upload_captions(video_id, srt_path)
+        if not caption_result.success:
+            logger.error(
+                "youtube: video is uploaded, but captions still require retry: %s",
+                caption_result.error_message or "unknown error",
+            )
+            return False
+        state_store.mark_captions_uploaded(video_path, "youtube")
+        record = state_store.get_status(video_path, "youtube")
+
+    playlist_configured = metadata.channel in config.platforms.youtube.playlists
+    if playlist_configured and record is not None and not record.playlist_added:
+        if not retry_missing:
+            return False
+        playlist_id = config.platforms.youtube.playlists[metadata.channel]
+        if not uploader.add_to_playlist(
+            video_id,
+            playlist_id,
+            playlist_title=metadata.channel,
+        ):
+            logger.error(
+                "youtube: video is uploaded, but adding it to the playlist "
+                "still requires retry"
+            )
+            return False
+        state_store.mark_playlist_added(video_path, "youtube")
+
+    return True
+
+
 def process_ready_recording(
     video_path: Path,
     metadata: StreamMetadata,
@@ -202,14 +264,26 @@ def process_ready_recording(
     description = build_description(metadata, duration_seconds)
     tags = build_tags(metadata)
     srt_path = _srt_path(video_path)
+    youtube_uploaded_this_cycle = False
+    youtube_finalization_complete = True
 
     for platform, uploader in uploaders.items():
         try:
             current = state_store.get_status(video_path, platform)
-            if current is not None and current.status in {
-                UploadStatus.SUCCESS,
-                UploadStatus.SKIPPED,
-            }:
+            if current is not None and current.status is UploadStatus.SUCCESS:
+                if platform == "youtube":
+                    youtube_finalization_complete = _youtube_finalization_complete(
+                        video_path,
+                        metadata,
+                        srt_path,
+                        config,
+                        state_store,
+                        uploader,
+                        retry_missing=True,
+                    )
+                logger.info("%s: skipping terminal status %s", platform, current.status.value)
+                continue
+            if current is not None and current.status is UploadStatus.SKIPPED:
                 logger.info("%s: skipping terminal status %s", platform, current.status.value)
                 continue
             if (
@@ -295,6 +369,7 @@ def process_ready_recording(
                 state_store.mark_captions_uploaded(video_path, platform)
 
             if platform == "youtube" and metadata.channel in config.platforms.youtube.playlists:
+                youtube_uploaded_this_cycle = True
                 playlist_id = config.platforms.youtube.playlists[metadata.channel]
                 if uploader.add_to_playlist(
                     result.platform_video_id or "",
@@ -302,8 +377,27 @@ def process_ready_recording(
                     playlist_title=metadata.channel,
                 ):
                     state_store.mark_playlist_added(video_path, platform)
+            elif platform == "youtube":
+                youtube_uploaded_this_cycle = True
         except Exception as exc:
             _mark_exception_failed(state_store, video_path, platform, exc)
+
+    if "youtube" in uploaders and youtube_uploaded_this_cycle:
+        youtube_finalization_complete = _youtube_finalization_complete(
+            video_path,
+            metadata,
+            srt_path,
+            config,
+            state_store,
+            uploaders["youtube"],
+            retry_missing=False,
+        )
+    if not youtube_finalization_complete:
+        logger.warning(
+            "youtube: keeping source files until captions and playlist "
+            "finalization succeeds"
+        )
+        return
 
     move_result = move_processed_recording(
         video_path, config, state_store, required_platforms
