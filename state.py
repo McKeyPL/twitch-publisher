@@ -44,6 +44,36 @@ class UploadStatusRecord:
     playlist_added: bool
 
 
+@dataclass(frozen=True, slots=True)
+class UploadPartSpec:
+    index: int
+    total_parts: int
+    part_path: Path
+    start_seconds: float
+    end_seconds: float
+    srt_path: Path | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class UploadPartStatusRecord:
+    video_path: Path
+    platform: Platform
+    part_index: int
+    total_parts: int
+    part_path: Path
+    srt_path: Path | None
+    start_seconds: float
+    end_seconds: float
+    status: UploadStatus
+    platform_video_id: str | None
+    attempts: int
+    last_error: str | None
+    created_at: datetime
+    updated_at: datetime
+    captions_uploaded: bool
+    playlist_added: bool
+
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS upload_status (
     video_path TEXT NOT NULL,
@@ -73,6 +103,33 @@ CREATE TABLE IF NOT EXISTS api_quota_usage (
     updated_at TEXT NOT NULL,
     PRIMARY KEY (platform, quota_period)
 );
+
+CREATE TABLE IF NOT EXISTS upload_part_status (
+    video_path TEXT NOT NULL,
+    platform TEXT NOT NULL CHECK (platform IN ('youtube', 'cda', 'rumble')),
+    part_index INTEGER NOT NULL CHECK (part_index >= 1),
+    total_parts INTEGER NOT NULL CHECK (total_parts >= 1),
+    part_path TEXT NOT NULL,
+    srt_path TEXT,
+    start_seconds REAL NOT NULL CHECK (start_seconds >= 0),
+    end_seconds REAL NOT NULL CHECK (end_seconds > start_seconds),
+    status TEXT NOT NULL CHECK (
+        status IN ('PENDING', 'IN_PROGRESS', 'SUCCESS', 'SKIPPED', 'FAILED')
+    ),
+    platform_video_id TEXT,
+    attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+    last_error TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    captions_uploaded INTEGER NOT NULL DEFAULT 0 CHECK (captions_uploaded IN (0, 1)),
+    playlist_added INTEGER NOT NULL DEFAULT 0 CHECK (playlist_added IN (0, 1)),
+    PRIMARY KEY (video_path, platform, part_index)
+);
+
+CREATE INDEX IF NOT EXISTS idx_upload_part_status_parent
+    ON upload_part_status(video_path, platform);
+CREATE INDEX IF NOT EXISTS idx_upload_part_status_status
+    ON upload_part_status(status);
 """
 
 
@@ -177,6 +234,27 @@ class StateStore:
         return UploadStatusRecord(
             video_path=Path(row["video_path"]),
             platform=Platform(row["platform"]),
+            status=UploadStatus(row["status"]),
+            platform_video_id=row["platform_video_id"],
+            attempts=row["attempts"],
+            last_error=row["last_error"],
+            created_at=_deserialize_datetime(row["created_at"]),
+            updated_at=_deserialize_datetime(row["updated_at"]),
+            captions_uploaded=bool(row["captions_uploaded"]),
+            playlist_added=bool(row["playlist_added"]),
+        )
+
+    @staticmethod
+    def _part_record_from_row(row: sqlite3.Row) -> UploadPartStatusRecord:
+        return UploadPartStatusRecord(
+            video_path=Path(row["video_path"]),
+            platform=Platform(row["platform"]),
+            part_index=row["part_index"],
+            total_parts=row["total_parts"],
+            part_path=Path(row["part_path"]),
+            srt_path=Path(row["srt_path"]) if row["srt_path"] else None,
+            start_seconds=row["start_seconds"],
+            end_seconds=row["end_seconds"],
             status=UploadStatus(row["status"]),
             platform_video_id=row["platform_video_id"],
             attempts=row["attempts"],
@@ -405,6 +483,391 @@ class StateStore:
             for platform in platforms
         )
 
+    def reopen_for_multipart(
+        self,
+        video_path: str | Path,
+        platform: str | Platform,
+    ) -> UploadStatusRecord:
+        """Reopen an old SKIPPED/FAILED parent after multipart support is enabled."""
+        current = self.get_or_create_status(video_path, platform)
+        if current.status is UploadStatus.SUCCESS:
+            raise StateStoreError("A successful parent upload cannot be reopened")
+        if current.status in {UploadStatus.PENDING, UploadStatus.IN_PROGRESS}:
+            return current
+        connection = self._require_connection()
+        with connection:
+            connection.execute(
+                """
+                UPDATE upload_status
+                SET status = ?, platform_video_id = NULL, last_error = NULL,
+                    captions_uploaded = 0, playlist_added = 0, updated_at = ?
+                WHERE video_path = ? AND platform = ?
+                """,
+                (
+                    UploadStatus.PENDING.value,
+                    _serialize_datetime(_utc_now()),
+                    str(current.video_path),
+                    current.platform.value,
+                ),
+            )
+        record = self.get_status(current.video_path, current.platform)
+        if record is None:  # pragma: no cover
+            raise StateStoreError("The parent record disappeared while reopening")
+        return record
+
+    def sync_upload_parts(
+        self,
+        video_path: str | Path,
+        platform: str | Platform,
+        parts: Iterable[UploadPartSpec],
+    ) -> list[UploadPartStatusRecord]:
+        """Persist a verified split manifest without overwriting terminal parts."""
+        normalized_video = _normalize_video_path(video_path)
+        normalized_platform = _coerce_platform(platform)
+        specifications = sorted(parts, key=lambda item: item.index)
+        if not specifications:
+            raise StateStoreError("A multipart upload must contain at least one part")
+        expected_indexes = list(range(1, len(specifications) + 1))
+        if [item.index for item in specifications] != expected_indexes:
+            raise StateStoreError("Multipart indexes must be contiguous and start at 1")
+        if any(item.total_parts != len(specifications) for item in specifications):
+            raise StateStoreError("Every part must declare the same correct total_parts")
+        for item in specifications:
+            if item.start_seconds < 0 or item.end_seconds <= item.start_seconds:
+                raise StateStoreError(f"Invalid boundaries for part {item.index}")
+
+        connection = self._require_connection()
+        now = _serialize_datetime(_utc_now())
+        with connection:
+            existing_rows = connection.execute(
+                """
+                SELECT * FROM upload_part_status
+                WHERE video_path = ? AND platform = ?
+                """,
+                (str(normalized_video), normalized_platform.value),
+            ).fetchall()
+            existing = {
+                row["part_index"]: self._part_record_from_row(row)
+                for row in existing_rows
+            }
+            stale_indexes = set(existing) - set(expected_indexes)
+            if any(
+                existing[index].status
+                in {UploadStatus.SUCCESS, UploadStatus.SKIPPED}
+                for index in stale_indexes
+            ):
+                raise StateStoreError(
+                    "The new split manifest would remove a terminal upload part"
+                )
+            if stale_indexes:
+                connection.executemany(
+                    """
+                    DELETE FROM upload_part_status
+                    WHERE video_path = ? AND platform = ? AND part_index = ?
+                    """,
+                    [
+                        (
+                            str(normalized_video),
+                            normalized_platform.value,
+                            index,
+                        )
+                        for index in stale_indexes
+                    ],
+                )
+
+            for item in specifications:
+                part_path = _normalize_video_path(item.part_path)
+                srt_path = (
+                    _normalize_video_path(item.srt_path)
+                    if item.srt_path is not None
+                    else None
+                )
+                current = existing.get(item.index)
+                changed = current is not None and (
+                    current.total_parts != item.total_parts
+                    or current.part_path != part_path
+                    or current.srt_path != srt_path
+                    or current.start_seconds != item.start_seconds
+                    or current.end_seconds != item.end_seconds
+                )
+                if changed and current.status in {
+                    UploadStatus.SUCCESS,
+                    UploadStatus.SKIPPED,
+                }:
+                    raise StateStoreError(
+                        f"Cannot replace terminal multipart part {item.index}"
+                    )
+                connection.execute(
+                    """
+                    INSERT INTO upload_part_status (
+                        video_path, platform, part_index, total_parts,
+                        part_path, srt_path, start_seconds, end_seconds,
+                        status, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(video_path, platform, part_index) DO UPDATE SET
+                        total_parts = excluded.total_parts,
+                        part_path = excluded.part_path,
+                        srt_path = excluded.srt_path,
+                        start_seconds = excluded.start_seconds,
+                        end_seconds = excluded.end_seconds,
+                        updated_at = excluded.updated_at
+                    """,
+                    (
+                        str(normalized_video),
+                        normalized_platform.value,
+                        item.index,
+                        item.total_parts,
+                        str(part_path),
+                        str(srt_path) if srt_path is not None else None,
+                        item.start_seconds,
+                        item.end_seconds,
+                        UploadStatus.PENDING.value,
+                        now,
+                        now,
+                    ),
+                )
+        return self.get_part_statuses(normalized_video, normalized_platform)
+
+    def get_part_status(
+        self,
+        video_path: str | Path,
+        platform: str | Platform,
+        part_index: int,
+    ) -> UploadPartStatusRecord | None:
+        if isinstance(part_index, bool) or not isinstance(part_index, int) or part_index < 1:
+            raise StateStoreError("part_index must be a positive integer")
+        normalized_video = _normalize_video_path(video_path)
+        normalized_platform = _coerce_platform(platform)
+        row = self._require_connection().execute(
+            """
+            SELECT * FROM upload_part_status
+            WHERE video_path = ? AND platform = ? AND part_index = ?
+            """,
+            (str(normalized_video), normalized_platform.value, part_index),
+        ).fetchone()
+        return None if row is None else self._part_record_from_row(row)
+
+    def get_part_statuses(
+        self,
+        video_path: str | Path,
+        platform: str | Platform,
+    ) -> list[UploadPartStatusRecord]:
+        normalized_video = _normalize_video_path(video_path)
+        normalized_platform = _coerce_platform(platform)
+        rows = self._require_connection().execute(
+            """
+            SELECT * FROM upload_part_status
+            WHERE video_path = ? AND platform = ?
+            ORDER BY part_index
+            """,
+            (str(normalized_video), normalized_platform.value),
+        ).fetchall()
+        return [self._part_record_from_row(row) for row in rows]
+
+    def _set_part_status(
+        self,
+        video_path: str | Path,
+        platform: str | Platform,
+        part_index: int,
+        status: UploadStatus,
+        *,
+        platform_video_id: str | None = None,
+        last_error: str | None = None,
+        increment_attempts: bool = False,
+    ) -> UploadPartStatusRecord:
+        current = self.get_part_status(video_path, platform, part_index)
+        if current is None:
+            raise StateStoreError(
+                f"Multipart part {part_index} must be synced before status updates"
+            )
+        if current.status in {UploadStatus.SUCCESS, UploadStatus.SKIPPED}:
+            if current.status is not status:
+                raise StateStoreError(
+                    f"Cannot change terminal part status {current.status.value} "
+                    f"to {status.value}"
+                )
+            if platform_video_id is None:
+                return current
+        with self._require_connection():
+            self._require_connection().execute(
+                """
+                UPDATE upload_part_status
+                SET status = ?,
+                    platform_video_id = COALESCE(?, platform_video_id),
+                    attempts = attempts + ?,
+                    last_error = ?,
+                    updated_at = ?
+                WHERE video_path = ? AND platform = ? AND part_index = ?
+                """,
+                (
+                    status.value,
+                    platform_video_id,
+                    1 if increment_attempts
+                    and current.status not in {UploadStatus.SUCCESS, UploadStatus.SKIPPED}
+                    else 0,
+                    last_error,
+                    _serialize_datetime(_utc_now()),
+                    str(current.video_path),
+                    current.platform.value,
+                    current.part_index,
+                ),
+            )
+        record = self.get_part_status(
+            current.video_path,
+            current.platform,
+            current.part_index,
+        )
+        if record is None:  # pragma: no cover
+            raise StateStoreError("The multipart record disappeared during update")
+        return record
+
+    def mark_part_in_progress(
+        self, video_path: str | Path, platform: str | Platform, part_index: int
+    ) -> UploadPartStatusRecord:
+        return self._set_part_status(
+            video_path, platform, part_index, UploadStatus.IN_PROGRESS
+        )
+
+    def mark_part_success(
+        self,
+        video_path: str | Path,
+        platform: str | Platform,
+        part_index: int,
+        platform_video_id: str | None = None,
+    ) -> UploadPartStatusRecord:
+        return self._set_part_status(
+            video_path,
+            platform,
+            part_index,
+            UploadStatus.SUCCESS,
+            platform_video_id=platform_video_id,
+            increment_attempts=True,
+        )
+
+    def mark_part_skipped(
+        self,
+        video_path: str | Path,
+        platform: str | Platform,
+        part_index: int,
+        reason: str,
+    ) -> UploadPartStatusRecord:
+        if not isinstance(reason, str) or not reason.strip():
+            raise StateStoreError("The part skip reason cannot be empty")
+        return self._set_part_status(
+            video_path,
+            platform,
+            part_index,
+            UploadStatus.SKIPPED,
+            last_error=reason.strip(),
+        )
+
+    def mark_part_failed(
+        self,
+        video_path: str | Path,
+        platform: str | Platform,
+        part_index: int,
+        error_message: str,
+    ) -> UploadPartStatusRecord:
+        if not isinstance(error_message, str) or not error_message.strip():
+            raise StateStoreError("The part error message cannot be empty")
+        return self._set_part_status(
+            video_path,
+            platform,
+            part_index,
+            UploadStatus.FAILED,
+            last_error=error_message.strip(),
+            increment_attempts=True,
+        )
+
+    def _mark_part_flag(
+        self,
+        video_path: str | Path,
+        platform: str | Platform,
+        part_index: int,
+        column: str,
+    ) -> UploadPartStatusRecord:
+        current = self.get_part_status(video_path, platform, part_index)
+        if current is None or current.status is not UploadStatus.SUCCESS:
+            raise StateStoreError(
+                f"Cannot set multipart {column} before successful upload"
+            )
+        with self._require_connection():
+            self._require_connection().execute(
+                f"""
+                UPDATE upload_part_status
+                SET {column} = 1, updated_at = ?
+                WHERE video_path = ? AND platform = ? AND part_index = ?
+                """,
+                (
+                    _serialize_datetime(_utc_now()),
+                    str(current.video_path),
+                    current.platform.value,
+                    current.part_index,
+                ),
+            )
+        record = self.get_part_status(
+            current.video_path,
+            current.platform,
+            current.part_index,
+        )
+        if record is None:  # pragma: no cover
+            raise StateStoreError("The multipart record disappeared while setting flag")
+        return record
+
+    def mark_part_captions_uploaded(
+        self, video_path: str | Path, platform: str | Platform, part_index: int
+    ) -> UploadPartStatusRecord:
+        return self._mark_part_flag(
+            video_path, platform, part_index, "captions_uploaded"
+        )
+
+    def mark_part_playlist_added(
+        self, video_path: str | Path, platform: str | Platform, part_index: int
+    ) -> UploadPartStatusRecord:
+        normalized_platform = _coerce_platform(platform)
+        if normalized_platform is not Platform.YOUTUBE:
+            raise StateStoreError(
+                "Multipart playlist_added is available only for YouTube"
+            )
+        return self._mark_part_flag(
+            video_path, normalized_platform, part_index, "playlist_added"
+        )
+
+    def are_parts_fully_processed(
+        self,
+        video_path: str | Path,
+        platform: str | Platform,
+        *,
+        require_captions: bool = False,
+        require_playlist: bool = False,
+    ) -> bool:
+        records = self.get_part_statuses(video_path, platform)
+        if not records:
+            return False
+        expected_indexes = list(range(1, records[0].total_parts + 1))
+        if [record.part_index for record in records] != expected_indexes:
+            return False
+        if any(record.total_parts != len(records) for record in records):
+            return False
+        for record in records:
+            if record.status not in {UploadStatus.SUCCESS, UploadStatus.SKIPPED}:
+                return False
+            if record.status is UploadStatus.SUCCESS:
+                caption_file_nonempty = bool(
+                    record.srt_path
+                    and record.srt_path.is_file()
+                    and record.srt_path.stat().st_size > 0
+                )
+                if (
+                    require_captions
+                    and caption_file_nonempty
+                    and not record.captions_uploaded
+                ):
+                    return False
+                if require_playlist and not record.playlist_added:
+                    return False
+        return True
+
     def migrate_video_path(
         self,
         old_video_path: str | Path,
@@ -424,7 +887,13 @@ class StateStore:
                     (str(old_path),),
                 ).fetchone()[0]
             )
-            if old_count == 0:
+            old_part_count = int(
+                connection.execute(
+                    "SELECT COUNT(*) FROM upload_part_status WHERE video_path = ?",
+                    (str(old_path),),
+                ).fetchone()[0]
+            )
+            if old_count == 0 and old_part_count == 0:
                 return 0
 
             conflict = connection.execute(
@@ -440,6 +909,19 @@ class StateStore:
                     "Cannot migrate recording state because the target path "
                     f"already has a {conflict['platform']!r} status: {new_path}"
                 )
+            part_conflict = connection.execute(
+                """
+                SELECT platform FROM upload_part_status
+                WHERE video_path = ?
+                LIMIT 1
+                """,
+                (str(new_path),),
+            ).fetchone()
+            if part_conflict is not None:
+                raise StateStoreError(
+                    "Cannot migrate multipart state because the target path "
+                    f"already has {part_conflict['platform']!r} parts: {new_path}"
+                )
 
             cursor = connection.execute(
                 """
@@ -453,7 +935,19 @@ class StateStore:
                     str(old_path),
                 ),
             )
-        return int(cursor.rowcount)
+            part_cursor = connection.execute(
+                """
+                UPDATE upload_part_status
+                SET video_path = ?, updated_at = ?
+                WHERE video_path = ?
+                """,
+                (
+                    str(new_path),
+                    _serialize_datetime(_utc_now()),
+                    str(old_path),
+                ),
+            )
+        return int(cursor.rowcount) + int(part_cursor.rowcount)
 
     def get_quota_usage(self, bucket: str, period: str) -> int:
         """Return locally reserved units for a quota period."""

@@ -6,7 +6,13 @@ from pathlib import Path
 
 import pytest
 
-from state import Platform, StateStore, StateStoreError, UploadStatus
+from state import (
+    Platform,
+    StateStore,
+    StateStoreError,
+    UploadPartSpec,
+    UploadStatus,
+)
 
 
 def test_pending_in_progress_success_cycle_and_wal(tmp_path: Path) -> None:
@@ -160,3 +166,151 @@ def test_video_path_migration_refuses_target_state_conflict(tmp_path: Path) -> N
 
         assert store.get_status(old_video, Platform.CDA) is not None
         assert store.get_status(new_video, Platform.RUMBLE) is not None
+
+
+def part_specs(tmp_path: Path, total: int = 2) -> list[UploadPartSpec]:
+    specs: list[UploadPartSpec] = []
+    for index in range(1, total + 1):
+        part = tmp_path / f"part_{index:03d}.mkv"
+        part.write_bytes(b"part")
+        srt = tmp_path / f"part_{index:03d}_chat.srt"
+        srt.write_text(
+            f"1\n00:00:00,000 --> 00:00:01,000\npart {index}\n",
+            encoding="utf-8",
+        )
+        specs.append(
+            UploadPartSpec(
+                index=index,
+                total_parts=total,
+                part_path=part,
+                srt_path=srt,
+                start_seconds=(index - 1) * 10,
+                end_seconds=index * 10,
+            )
+        )
+    return specs
+
+
+def test_multipart_cycle_tracks_each_part_independently(tmp_path: Path) -> None:
+    video = tmp_path / "stream.mkv"
+    with StateStore(tmp_path / "state.sqlite3") as store:
+        records = store.sync_upload_parts(
+            video,
+            Platform.YOUTUBE,
+            part_specs(tmp_path),
+        )
+        assert [record.status for record in records] == [
+            UploadStatus.PENDING,
+            UploadStatus.PENDING,
+        ]
+
+        store.mark_part_in_progress(video, Platform.YOUTUBE, 1)
+        first = store.mark_part_success(
+            video,
+            Platform.YOUTUBE,
+            1,
+            "youtube-part-1",
+        )
+        store.mark_part_captions_uploaded(video, Platform.YOUTUBE, 1)
+        store.mark_part_playlist_added(video, Platform.YOUTUBE, 1)
+        second = store.mark_part_failed(
+            video,
+            Platform.YOUTUBE,
+            2,
+            "network failure",
+        )
+
+        assert first.attempts == 1
+        assert second.attempts == 1
+        assert not store.are_parts_fully_processed(
+            video,
+            Platform.YOUTUBE,
+            require_captions=True,
+            require_playlist=True,
+        )
+
+        store.mark_part_in_progress(video, Platform.YOUTUBE, 2)
+        store.mark_part_success(video, Platform.YOUTUBE, 2, "youtube-part-2")
+        store.mark_part_captions_uploaded(video, Platform.YOUTUBE, 2)
+        store.mark_part_playlist_added(video, Platform.YOUTUBE, 2)
+
+        assert store.are_parts_fully_processed(
+            video,
+            Platform.YOUTUBE,
+            require_captions=True,
+            require_playlist=True,
+        )
+        final_records = store.get_part_statuses(video, Platform.YOUTUBE)
+        assert [record.platform_video_id for record in final_records] == [
+            "youtube-part-1",
+            "youtube-part-2",
+        ]
+
+
+def test_sync_parts_preserves_terminal_status_and_rejects_manifest_change(
+    tmp_path: Path,
+) -> None:
+    video = tmp_path / "stream.mkv"
+    specs = part_specs(tmp_path)
+    with StateStore(tmp_path / "state.sqlite3") as store:
+        store.sync_upload_parts(video, Platform.RUMBLE, specs)
+        store.mark_part_success(video, Platform.RUMBLE, 1, "rumble-part-1")
+
+        repeated = store.sync_upload_parts(video, Platform.RUMBLE, specs)
+        assert repeated[0].status is UploadStatus.SUCCESS
+        assert repeated[0].attempts == 1
+
+        changed = list(specs)
+        changed[0] = UploadPartSpec(
+            index=1,
+            total_parts=2,
+            part_path=tmp_path / "replacement.mkv",
+            start_seconds=0,
+            end_seconds=8,
+        )
+        with pytest.raises(StateStoreError, match="terminal multipart part"):
+            store.sync_upload_parts(video, Platform.RUMBLE, changed)
+
+
+def test_empty_caption_part_does_not_block_multipart_completion(
+    tmp_path: Path,
+) -> None:
+    video = tmp_path / "stream.mkv"
+    specs = part_specs(tmp_path, total=1)
+    specs[0].srt_path.write_text("", encoding="utf-8")
+    with StateStore(tmp_path / "state.sqlite3") as store:
+        store.sync_upload_parts(video, Platform.YOUTUBE, specs)
+        store.mark_part_success(video, Platform.YOUTUBE, 1, "youtube-part")
+        store.mark_part_playlist_added(video, Platform.YOUTUBE, 1)
+
+        assert store.are_parts_fully_processed(
+            video,
+            Platform.YOUTUBE,
+            require_captions=True,
+            require_playlist=True,
+        )
+
+
+def test_old_terminal_skip_can_be_reopened_for_multipart(tmp_path: Path) -> None:
+    video = tmp_path / "stream.mkv"
+    with StateStore(tmp_path / "state.sqlite3") as store:
+        store.mark_skipped(video, Platform.YOUTUBE, "over 12 hours")
+        reopened = store.reopen_for_multipart(video, Platform.YOUTUBE)
+
+        assert reopened.status is UploadStatus.PENDING
+        assert reopened.last_error is None
+
+        store.mark_success(video, Platform.YOUTUBE, "already-uploaded")
+        with pytest.raises(StateStoreError, match="cannot be reopened"):
+            store.reopen_for_multipart(video, Platform.YOUTUBE)
+
+
+def test_video_path_migration_also_moves_multipart_records(tmp_path: Path) -> None:
+    old_video = tmp_path / "old.mkv"
+    new_video = tmp_path / "new.mkv"
+    with StateStore(tmp_path / "state.sqlite3") as store:
+        store.sync_upload_parts(old_video, Platform.RUMBLE, part_specs(tmp_path))
+
+        assert store.migrate_video_path(old_video, new_video) == 2
+        assert store.get_part_statuses(old_video, Platform.RUMBLE) == []
+        assert len(store.get_part_statuses(new_video, Platform.RUMBLE)) == 2
