@@ -15,7 +15,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from srt_splitter import SegmentWindow, split_srt_file
+from srt_splitter import SRTError, SegmentWindow, split_srt_file
 
 
 logger = logging.getLogger(__name__)
@@ -352,7 +352,19 @@ class MediaSplitter:
             part.path.with_name(f"{part.path.stem}_chat.srt")
             for part in parts
         ]
-        split_srt_file(Path(srt_path), windows, outputs)
+        try:
+            split_srt_file(Path(srt_path), windows, outputs)
+        except (OSError, SRTError) as exc:
+            logger.warning(
+                "Skipping invalid/unreadable chat captions while keeping media "
+                "parts uploadable: %s: %s",
+                srt_path,
+                exc,
+            )
+            for output in outputs:
+                if output.is_file():
+                    output.unlink()
+            return parts
         return [
             MediaPart(
                 index=part.index,
@@ -373,10 +385,16 @@ class MediaSplitter:
         segment_time_seconds: float,
         constraints: SplitConstraints,
         parts: list[MediaPart],
+        srt_path: Path | None,
     ) -> dict[str, Any]:
         return {
             "version": MANIFEST_VERSION,
             "source": _source_identity(source),
+            "srt_source": (
+                _source_identity(Path(srt_path))
+                if srt_path is not None and Path(srt_path).is_file()
+                else None
+            ),
             "platform": platform,
             "constraints": _constraints_dict(constraints),
             "segment_time_seconds": segment_time_seconds,
@@ -408,6 +426,7 @@ class MediaSplitter:
         platform: str,
         constraints: SplitConstraints,
         work_directory: Path,
+        srt_path: Path | None,
     ) -> SplitPlan | None:
         manifest_path = work_directory / "manifest.json"
         if not manifest_path.is_file():
@@ -417,6 +436,12 @@ class MediaSplitter:
             if (
                 payload.get("version") != MANIFEST_VERSION
                 or payload.get("source") != _source_identity(source)
+                or payload.get("srt_source")
+                != (
+                    _source_identity(Path(srt_path))
+                    if srt_path is not None and Path(srt_path).is_file()
+                    else None
+                )
                 or payload.get("platform") != platform
                 or payload.get("constraints") != _constraints_dict(constraints)
             ):
@@ -480,6 +505,7 @@ class MediaSplitter:
             platform,
             constraints,
             work_directory,
+            srt_path,
         )
         if reused is not None:
             logger.info(
@@ -517,6 +543,7 @@ class MediaSplitter:
                     segment_time,
                     constraints,
                     parts,
+                    srt_path,
                 )
                 manifest_path = work_directory / "manifest.json"
                 self._write_manifest(manifest_path, payload)

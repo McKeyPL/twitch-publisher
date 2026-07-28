@@ -108,6 +108,78 @@ def test_reuses_verified_manifest_without_running_ffmpeg_again(
     assert run.call_count == 1
 
 
+def test_changed_srt_invalidates_manifest_and_regenerates_captions(
+    tmp_path: Path,
+) -> None:
+    source = make_source(tmp_path)
+    srt = tmp_path / "stream_chat.srt"
+    srt.write_text(
+        "1\n00:00:01,000 --> 00:00:02,000\nold\n",
+        encoding="utf-8",
+    )
+    splitter = MediaSplitter(disk_space_multiplier=1.01)
+    constraints = SplitConstraints(hard_max_duration_seconds=20)
+
+    def fake_ffmpeg(
+        _source: Path,
+        work_directory: Path,
+        _segment_time: float,
+    ) -> None:
+        emit_parts(work_directory, [("part_000.mkv", 0.0, 10.0, 500)])
+
+    with patch.object(splitter, "_run_ffmpeg", side_effect=fake_ffmpeg) as run:
+        first = splitter.create_plan(
+            source,
+            "youtube",
+            10,
+            constraints,
+            srt_path=srt,
+        )
+        srt.write_text(
+            "1\n00:00:01,000 --> 00:00:02,000\nnew text\n",
+            encoding="utf-8",
+        )
+        second = splitter.create_plan(
+            source,
+            "youtube",
+            10,
+            constraints,
+            srt_path=srt,
+        )
+
+    assert first.reused is False
+    assert second.reused is False
+    assert run.call_count == 2
+    assert second.parts[0].srt_path is not None
+    assert "new text" in second.parts[0].srt_path.read_text(encoding="utf-8")
+
+
+def test_invalid_srt_does_not_block_media_parts(tmp_path: Path) -> None:
+    source = make_source(tmp_path)
+    srt = tmp_path / "broken_chat.srt"
+    srt.write_text("not a valid SRT", encoding="utf-8")
+    splitter = MediaSplitter(disk_space_multiplier=1.01)
+
+    def fake_ffmpeg(
+        _source: Path,
+        work_directory: Path,
+        _segment_time: float,
+    ) -> None:
+        emit_parts(work_directory, [("part_000.mkv", 0.0, 10.0, 500)])
+
+    with patch.object(splitter, "_run_ffmpeg", side_effect=fake_ffmpeg):
+        plan = splitter.create_plan(
+            source,
+            "youtube",
+            10,
+            SplitConstraints(hard_max_duration_seconds=20),
+            srt_path=srt,
+        )
+
+    assert len(plan.parts) == 1
+    assert plan.parts[0].srt_path is None
+
+
 def test_replans_with_shorter_segments_when_actual_part_exceeds_hard_limit(
     tmp_path: Path,
 ) -> None:
