@@ -697,6 +697,7 @@ def process_ready_recording(
         )
         media_splitter = MediaSplitter(
             ffmpeg_path=config.paths.ffmpeg,
+            ffprobe_path=config.paths.ffprobe,
             work_directory_name=config.splitting.work_directory_name,
             max_replans=config.splitting.max_replans,
             disk_space_multiplier=config.splitting.disk_space_multiplier,

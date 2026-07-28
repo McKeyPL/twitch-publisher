@@ -148,9 +148,10 @@ The first upload opens a browser for the supported OAuth flow. The refreshed tok
 is stored in `auth/youtube_token.json`. YouTube uploads are resumable and retried
 for transient HTTP/network failures.
 
-The application reserves local quota before upload and captions insertion. Local
-counters protect the configured budget, while Google Cloud Console remains the
-authoritative source. Counters reset using Pacific Time calendar days.
+The application reserves local quota before video, caption, and playlist API
+operations. Local counters protect the configured budget, while Google Cloud
+Console remains the authoritative source. Counters reset using Pacific Time
+calendar days.
 
 Non-empty SRT files up to the configured size limit are uploaded through
 `captions.insert`. SRT input must be valid UTF-8 SubRip. The OAuth token includes
@@ -193,9 +194,10 @@ The temporary parts and `manifest.json` are stored beside the source under:
 The watcher ignores this directory. SQLite tracks every part separately, so after
 a restart only failed or unfinished parts are retried. Before splitting, the
 publisher requires free space approximately equal to 105% of the source size.
-Every generated part is checked against hard duration/size limits. If keyframe
-placement creates an oversized part, the target duration is reduced and the plan
-is regenerated up to `splitting.max_replans`.
+Every generated part is checked against hard limits using its real byte size and
+an individual `ffprobe` duration measurement. If keyframe placement creates an
+oversized part, the target duration is reduced and the plan is regenerated up to
+`splitting.max_replans`.
 
 The original MKV/SRT/TXT set is moved to `_uploaded` only after all required
 platforms and all parts are `SUCCESS` or a legal `SKIPPED`. Work parts are then

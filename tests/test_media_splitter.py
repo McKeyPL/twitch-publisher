@@ -43,7 +43,10 @@ def test_creates_lossless_plan_and_splits_srt_on_csv_boundaries(
         "1\n00:00:09,500 --> 00:00:10,500\ncrossing\n",
         encoding="utf-8",
     )
-    splitter = MediaSplitter(disk_space_multiplier=1.01)
+    splitter = MediaSplitter(
+        disk_space_multiplier=1.01,
+        duration_probe=lambda _path: 10.0,
+    )
 
     def fake_ffmpeg(
         _source: Path,
@@ -83,7 +86,10 @@ def test_reuses_verified_manifest_without_running_ffmpeg_again(
     tmp_path: Path,
 ) -> None:
     source = make_source(tmp_path)
-    splitter = MediaSplitter(disk_space_multiplier=1.01)
+    splitter = MediaSplitter(
+        disk_space_multiplier=1.01,
+        duration_probe=lambda _path: 10.0,
+    )
     constraints = SplitConstraints(hard_max_size_bytes=600, target_size_bytes=500)
 
     def fake_ffmpeg(
@@ -117,7 +123,10 @@ def test_changed_srt_invalidates_manifest_and_regenerates_captions(
         "1\n00:00:01,000 --> 00:00:02,000\nold\n",
         encoding="utf-8",
     )
-    splitter = MediaSplitter(disk_space_multiplier=1.01)
+    splitter = MediaSplitter(
+        disk_space_multiplier=1.01,
+        duration_probe=lambda _path: 10.0,
+    )
     constraints = SplitConstraints(hard_max_duration_seconds=20)
 
     def fake_ffmpeg(
@@ -158,7 +167,10 @@ def test_invalid_srt_does_not_block_media_parts(tmp_path: Path) -> None:
     source = make_source(tmp_path)
     srt = tmp_path / "broken_chat.srt"
     srt.write_text("not a valid SRT", encoding="utf-8")
-    splitter = MediaSplitter(disk_space_multiplier=1.01)
+    splitter = MediaSplitter(
+        disk_space_multiplier=1.01,
+        duration_probe=lambda _path: 10.0,
+    )
 
     def fake_ffmpeg(
         _source: Path,
@@ -184,7 +196,11 @@ def test_replans_with_shorter_segments_when_actual_part_exceeds_hard_limit(
     tmp_path: Path,
 ) -> None:
     source = make_source(tmp_path)
-    splitter = MediaSplitter(max_replans=2, disk_space_multiplier=1.01)
+    splitter = MediaSplitter(
+        max_replans=2,
+        disk_space_multiplier=1.01,
+        duration_probe=lambda _path: 10.0,
+    )
     constraints = SplitConstraints(hard_max_size_bytes=500, target_size_bytes=450)
     target_times: list[float] = []
 
@@ -217,7 +233,11 @@ def test_fails_after_replan_budget_when_part_stays_oversized(
     tmp_path: Path,
 ) -> None:
     source = make_source(tmp_path)
-    splitter = MediaSplitter(max_replans=1, disk_space_multiplier=1.01)
+    splitter = MediaSplitter(
+        max_replans=1,
+        disk_space_multiplier=1.01,
+        duration_probe=lambda _path: 20.0,
+    )
 
     def fake_ffmpeg(
         _source: Path,
@@ -245,6 +265,7 @@ def test_cancelled_plan_never_starts_ffmpeg(tmp_path: Path) -> None:
     splitter = MediaSplitter(
         cancel_event=cancel_event,
         disk_space_multiplier=1.01,
+        duration_probe=lambda _path: 10.0,
     )
 
     with (

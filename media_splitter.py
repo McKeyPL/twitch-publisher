@@ -13,8 +13,9 @@ import subprocess
 import threading
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
+from duration_check import probe_duration_seconds
 from srt_splitter import SRTError, SegmentWindow, split_srt_file
 
 
@@ -99,10 +100,12 @@ class MediaSplitter:
         self,
         *,
         ffmpeg_path: str = "ffmpeg",
+        ffprobe_path: str = "ffprobe",
         work_directory_name: str = "_publisher_work",
         max_replans: int = 3,
         disk_space_multiplier: float = 1.05,
         cancel_event: threading.Event | None = None,
+        duration_probe: Callable[[Path], float] | None = None,
     ) -> None:
         work_name = work_directory_name.strip()
         if (
@@ -117,10 +120,17 @@ class MediaSplitter:
         if disk_space_multiplier <= 1:
             raise ValueError("disk_space_multiplier must be greater than 1")
         self.ffmpeg_path = ffmpeg_path
+        self.ffprobe_path = ffprobe_path
         self.work_directory_name = work_name
         self.max_replans = max_replans
         self.disk_space_multiplier = disk_space_multiplier
         self.cancel_event = cancel_event
+        self.duration_probe = duration_probe or (
+            lambda path: probe_duration_seconds(
+                path,
+                ffprobe_path=self.ffprobe_path,
+            )
+        )
 
     def _raise_if_cancelled(self) -> None:
         if self.cancel_event is not None and self.cancel_event.is_set():
@@ -308,13 +318,19 @@ class MediaSplitter:
                     )
                 if not part_path.is_file():
                     raise MediaSplitError(f"FFmpeg part is missing: {part_path}")
+                actual_duration = self.duration_probe(part_path)
+                if actual_duration <= 0:
+                    raise MediaSplitError(
+                        f"ffprobe returned invalid duration for {part_path}: "
+                        f"{actual_duration}"
+                    )
                 parts.append(
                     MediaPart(
                         index=index,
                         path=part_path,
                         start_seconds=start_seconds,
                         end_seconds=end_seconds,
-                        duration_seconds=end_seconds - start_seconds,
+                        duration_seconds=actual_duration,
                         size_bytes=part_path.stat().st_size,
                     )
                 )
