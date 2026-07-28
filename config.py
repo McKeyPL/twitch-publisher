@@ -108,6 +108,8 @@ class BrowserPlatformConfig:
     storage_state_file: Path
     title_limit: int | None
     max_duration_hours: float | None
+    normalize_filename: bool = False
+    filename_max_stem_length: int = 140
     primary_category: str | None = None
     license_option: str | None = None
     max_file_size_gb: float | None = None
@@ -286,6 +288,14 @@ def _browser_platform(
         ),
         max_duration_hours=_optional_positive_float(
             section.get("max_duration_hours"), f"{location}.max_duration_hours"
+        ),
+        normalize_filename=_boolean(
+            section.get("normalize_filename", False),
+            f"{location}.normalize_filename",
+        ),
+        filename_max_stem_length=_positive_int(
+            section.get("filename_max_stem_length", 140),
+            f"{location}.filename_max_stem_length",
         ),
         primary_category=_optional_string(
             section.get("primary_category"), f"{location}.primary_category"

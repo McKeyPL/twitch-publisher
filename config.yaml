@@ -43,6 +43,10 @@ platforms:
     # Local-file upload form, confirmed in an authenticated session.
     upload_url: https://www.cda.pl/uploader_video
     storage_state_file: auth/cda_state.json
+    # Legacy CDA backend rejects emoji/non-BMP symbols with a generic HTTP 500.
+    # Normalize complete MKV/SRT/TXT sets before creating upload statuses.
+    normalize_filename: true
+    filename_max_stem_length: 140
     # TODO: manually verify the current title and video-duration limits.
     title_limit: null
     max_duration_hours: null

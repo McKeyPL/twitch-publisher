@@ -405,6 +405,56 @@ class StateStore:
             for platform in platforms
         )
 
+    def migrate_video_path(
+        self,
+        old_video_path: str | Path,
+        new_video_path: str | Path,
+    ) -> int:
+        """Atomically move all platform statuses to a renamed recording path."""
+        old_path = _normalize_video_path(old_video_path)
+        new_path = _normalize_video_path(new_video_path)
+        if old_path == new_path:
+            return 0
+
+        connection = self._require_connection()
+        with connection:
+            old_count = int(
+                connection.execute(
+                    "SELECT COUNT(*) FROM upload_status WHERE video_path = ?",
+                    (str(old_path),),
+                ).fetchone()[0]
+            )
+            if old_count == 0:
+                return 0
+
+            conflict = connection.execute(
+                """
+                SELECT platform FROM upload_status
+                WHERE video_path = ?
+                LIMIT 1
+                """,
+                (str(new_path),),
+            ).fetchone()
+            if conflict is not None:
+                raise StateStoreError(
+                    "Cannot migrate recording state because the target path "
+                    f"already has a {conflict['platform']!r} status: {new_path}"
+                )
+
+            cursor = connection.execute(
+                """
+                UPDATE upload_status
+                SET video_path = ?, updated_at = ?
+                WHERE video_path = ?
+                """,
+                (
+                    str(new_path),
+                    _serialize_datetime(_utc_now()),
+                    str(old_path),
+                ),
+            )
+        return int(cursor.rowcount)
+
     def get_quota_usage(self, bucket: str, period: str) -> int:
         """Return locally reserved units for a quota period."""
         if not bucket.strip() or not period.strip():

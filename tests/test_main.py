@@ -207,6 +207,42 @@ def test_rumble_title_is_limited_to_90_characters(tmp_path: Path, monkeypatch) -
     assert rumble.titles[0].endswith(" | mrozopl | 2026-07-12")
 
 
+def test_cda_normalizes_recording_filename_before_upload(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config = config_for(tmp_path, monkeypatch)
+    stem = "20260714_170854_mrozopl_Arduino 📻 !dss"
+    video, metadata = make_recording(config.paths.recordings_root, stem)
+    cda = FakeUploader("cda", config.retry)
+
+    with StateStore(config.paths.database) as store:
+        process_ready_recording(
+            video,
+            metadata,
+            3600,
+            config,
+            store,
+            {"cda": cda},
+        )
+
+    normalized_name = "20260714_170854_mrozopl_Arduino.mkv"
+    normalized_path = video.with_name(normalized_name)
+    assert cda.uploaded == [normalized_path]
+    assert not video.exists()
+    destination = (
+        config.paths.recordings_root
+        / "mrozopl"
+        / config.moving.uploaded_directory_name
+    )
+    assert (destination / normalized_name).is_file()
+    assert (
+        destination / "20260714_170854_mrozopl_Arduino_chat.srt"
+    ).is_file()
+    assert (
+        destination / "20260714_170854_mrozopl_Arduino_meta.txt"
+    ).is_file()
+
+
 def test_rumble_no_video_track_skip_allows_recording_move(
     tmp_path: Path, monkeypatch
 ) -> None:

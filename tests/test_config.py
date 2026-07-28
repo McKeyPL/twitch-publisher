@@ -74,6 +74,9 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(config.platforms.rumble.primary_category, "Gaming")
         self.assertEqual(config.platforms.rumble.title_limit, 90)
         self.assertEqual(config.platforms.rumble.max_file_size_gb, 15.0)
+        self.assertTrue(config.platforms.cda.normalize_filename)
+        self.assertEqual(config.platforms.cda.filename_max_stem_length, 140)
+        self.assertFalse(config.platforms.rumble.normalize_filename)
         self.assertTrue(config.platforms.cda.form_options["accept_terms"])
         self.assertTrue(config.platforms.cda.form_options["confirm_rights"])
         self.assertFalse(config.platforms.cda.form_options["contains_violence"])
@@ -113,6 +116,17 @@ class ConfigValidationTests(unittest.TestCase):
         raw = valid_raw_config()
         raw["platforms"]["rumble"]["max_file_size_gb"] = 0
         with self.assertRaisesRegex(ConfigError, "max_file_size_gb"):
+            config_from_dict(raw)
+
+    def test_rejects_invalid_cda_filename_normalization_settings(self) -> None:
+        raw = valid_raw_config()
+        raw["platforms"]["cda"]["normalize_filename"] = "yes"
+        with self.assertRaisesRegex(ConfigError, "normalize_filename"):
+            config_from_dict(raw)
+
+        raw = valid_raw_config()
+        raw["platforms"]["cda"]["filename_max_stem_length"] = 0
+        with self.assertRaisesRegex(ConfigError, "filename_max_stem_length"):
             config_from_dict(raw)
 
     def test_rejects_empty_youtube_category_id(self) -> None:

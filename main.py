@@ -21,6 +21,7 @@ from duration_check import (
 )
 from meta_parser import StreamMetadata
 from mover import move_processed_recording
+from recording_name_normalizer import normalize_recording_set_for_cda
 from state import StateStore, UploadStatus
 from title_cleaner import title_from_metadata
 from uploaders.base import BaseUploader
@@ -184,6 +185,19 @@ def process_ready_recording(
     uploaders: Mapping[str, BaseUploader],
 ) -> None:
     """Process one ready recording while isolating each platform."""
+    if (
+        "cda" in uploaders
+        and config.platforms.cda.normalize_filename
+    ):
+        normalized = normalize_recording_set_for_cda(
+            video_path,
+            state_store,
+            max_stem_length=config.platforms.cda.filename_max_stem_length,
+        )
+        if normalized.renamed:
+            video_path = normalized.video_path
+            metadata = replace(metadata, source_path=normalized.metadata_path)
+
     required_platforms = list(uploaders)
     description = build_description(metadata, duration_seconds)
     tags = build_tags(metadata)

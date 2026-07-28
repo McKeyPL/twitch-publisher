@@ -133,3 +133,30 @@ def test_quota_period_change_starts_new_counter(tmp_path: Path) -> None:
         ) == (True, 1)
         assert store.get_quota_usage("youtube_videos_insert", "2026-07-17") == 100
         assert store.get_quota_usage("youtube_videos_insert", "2026-07-18") == 1
+
+
+def test_video_path_migration_preserves_all_platform_state(tmp_path: Path) -> None:
+    old_video = tmp_path / "Stream 📻.mkv"
+    new_video = tmp_path / "Stream.mkv"
+    with StateStore(tmp_path / "state.sqlite3") as store:
+        store.mark_success(old_video, Platform.YOUTUBE, "yt-id")
+        store.mark_failed(old_video, Platform.CDA, "HTTP 500")
+
+        assert store.migrate_video_path(old_video, new_video) == 2
+        assert store.get_status(old_video, Platform.YOUTUBE) is None
+        assert store.get_status(new_video, Platform.YOUTUBE).platform_video_id == "yt-id"
+        assert store.get_status(new_video, Platform.CDA).last_error == "HTTP 500"
+
+
+def test_video_path_migration_refuses_target_state_conflict(tmp_path: Path) -> None:
+    old_video = tmp_path / "old.mkv"
+    new_video = tmp_path / "new.mkv"
+    with StateStore(tmp_path / "state.sqlite3") as store:
+        store.mark_failed(old_video, Platform.CDA, "old")
+        store.mark_failed(new_video, Platform.RUMBLE, "new")
+
+        with pytest.raises(StateStoreError, match="target path"):
+            store.migrate_video_path(old_video, new_video)
+
+        assert store.get_status(old_video, Platform.CDA) is not None
+        assert store.get_status(new_video, Platform.RUMBLE) is not None

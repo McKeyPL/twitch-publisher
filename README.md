@@ -270,6 +270,24 @@ new filename. File changes are rolled back if SQLite migration fails. Use
 `-AllowMissingDatabase` only on an installation that genuinely has no existing
 state database.
 
+When CDA is enabled, the publisher also performs a narrower automatic
+normalization immediately before creating upload statuses. The default CDA
+configuration keeps ordinary BMP Unicode letters and numbers, including Polish
+diacritics, while removing emoji, non-BMP characters, variation selectors,
+private/control characters, chat commands, and unusual symbols. The MKV,
+optional chat SRT, and metadata TXT are renamed as one set. Existing SQLite
+statuses are migrated atomically so a partly processed recording is not uploaded
+again to a platform that already succeeded.
+
+```yaml
+platforms:
+  cda:
+    normalize_filename: true
+    filename_max_stem_length: 140
+```
+
+Set `normalize_filename: false` only to disable this CDA compatibility step.
+
 ## Tests
 
 ```bash

@@ -26,6 +26,7 @@ twitch-publisher/
 |-- watcher.py                  # one non-blocking scan cycle
 |-- meta_parser.py              # multiline metadata parser
 |-- title_cleaner.py            # title normalization and limits
+|-- recording_name_normalizer.py # legacy CDA-safe MKV/SRT/TXT renaming
 |-- duration_check.py           # file stability and ffprobe
 |-- state.py                    # SQLite/WAL, upload status, quota
 |-- mover.py                    # safe movement into _uploaded
@@ -47,6 +48,8 @@ twitch-publisher/
 - `meta_parser.py` owns metadata format and domain validation.
 - `duration_check.py` qualifies completed recordings and reads container duration
   through `ffprobe`.
+- `recording_name_normalizer.py` applies the legacy CDA filename profile and
+  atomically migrates existing SQLite statuses after renaming a recording set.
 - `state.py` is the only module that writes upload status and local quota usage.
 - `main.py` composes dependencies, retains the tracker between cycles, and
   isolates exceptions per recording and per platform.
