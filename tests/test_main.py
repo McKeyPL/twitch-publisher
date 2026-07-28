@@ -11,6 +11,7 @@ import pytest
 from config import Config, load_config
 from duration_check import ReadinessResult, ReadinessStatus
 from main import _request_stop, process_readiness_results, process_ready_recording
+from media_splitter import MediaPart, SplitPlan
 from meta_parser import StreamMetadata
 from state import StateStore, UploadStatus
 from uploaders.base import BaseUploader, UploadResult
@@ -72,6 +73,74 @@ class CaptionRetryYouTubeUploader(FakeUploader):
 
         self.caption_attempts += 1
         return CaptionUploadResult(True, caption_id="caption-id", status="serving")
+
+
+class FakeMediaSplitter:
+    def __init__(self) -> None:
+        self.created_for: list[str] = []
+        self.cleaned: list[str] = []
+
+    def create_plan(
+        self,
+        source_path: Path,
+        platform: str,
+        duration_seconds: float,
+        constraints,
+        *,
+        srt_path: Path | None = None,
+    ) -> SplitPlan:
+        self.created_for.append(platform)
+        work = source_path.parent / "_publisher_work" / "fake" / platform
+        work.mkdir(parents=True, exist_ok=True)
+        boundary = duration_seconds / 2
+        parts: list[MediaPart] = []
+        for index, (start, end) in enumerate(
+            ((0.0, boundary), (boundary, duration_seconds)),
+            start=1,
+        ):
+            path = work / f"part_{index:03d}.mkv"
+            path.write_bytes(f"part-{index}".encode())
+            part_srt = work / f"part_{index:03d}_chat.srt"
+            if srt_path is not None:
+                part_srt.write_text(
+                    "1\n00:00:00,000 --> 00:00:01,000\nChat\n",
+                    encoding="utf-8",
+                )
+            parts.append(
+                MediaPart(
+                    index=index,
+                    path=path,
+                    start_seconds=start,
+                    end_seconds=end,
+                    duration_seconds=end - start,
+                    size_bytes=path.stat().st_size,
+                    srt_path=part_srt if srt_path is not None else None,
+                )
+            )
+        manifest = work / "manifest.json"
+        manifest.write_text("{}", encoding="utf-8")
+        return SplitPlan(
+            source_path=source_path,
+            platform=platform,
+            work_directory=work,
+            manifest_path=manifest,
+            segment_time_seconds=boundary,
+            parts=tuple(parts),
+        )
+
+    def cleanup(self, plan: SplitPlan) -> None:
+        self.cleaned.append(plan.platform)
+
+
+class SequencedUploader(FakeUploader):
+    def __init__(self, name: str, retry_config, results: list[UploadResult]) -> None:
+        super().__init__(name, retry_config)
+        self.results = list(results)
+
+    def upload(self, video_path, title, description, tags, srt_path=None):
+        self.uploaded.append(Path(video_path))
+        self.titles.append(title)
+        return self.results.pop(0)
 
 
 def config_for(tmp_path: Path, monkeypatch) -> Config:
@@ -198,6 +267,10 @@ def test_invalid_readiness_result_does_not_block_ready_file(tmp_path: Path, monk
 
 def test_duration_limit_skips_only_limited_platform(tmp_path: Path, monkeypatch) -> None:
     config = config_for(tmp_path, monkeypatch)
+    config = replace(
+        config,
+        splitting=replace(config.splitting, enabled=False),
+    )
     video, metadata = make_recording(config.paths.recordings_root)
     uploaders = successful_uploaders(config)
 
@@ -208,6 +281,157 @@ def test_duration_limit_skips_only_limited_platform(tmp_path: Path, monkeypatch)
         assert store.get_status(video, "rumble").status is UploadStatus.SUCCESS
 
     assert uploaders["youtube"].uploaded == []
+    assert not video.exists()
+
+
+def test_long_youtube_recording_uploads_verified_parts_instead_of_skip(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = config_for(tmp_path, monkeypatch)
+    video, metadata = make_recording(config.paths.recordings_root)
+    youtube = FakeUploader(
+        "youtube",
+        config.retry,
+        result=UploadResult(
+            True,
+            "youtube-part-id",
+            "https://youtube.test/part",
+            captions_uploaded=True,
+        ),
+    )
+    splitter = FakeMediaSplitter()
+
+    with StateStore(config.paths.database) as store:
+        process_ready_recording(
+            video,
+            metadata,
+            13 * 3600,
+            config,
+            store,
+            {"youtube": youtube},
+            media_splitter=splitter,
+        )
+        parent = store.get_status(video, "youtube")
+        parts = store.get_part_statuses(video, "youtube")
+
+    assert parent is not None
+    assert parent.status is UploadStatus.SUCCESS
+    assert len(parts) == 2
+    assert all(record.status is UploadStatus.SUCCESS for record in parts)
+    assert len(youtube.uploaded) == 2
+    assert youtube.titles[0].endswith("(Part 1/2)")
+    assert youtube.titles[1].endswith("(Part 2/2)")
+    assert all(len(title) <= 100 for title in youtube.titles)
+    assert splitter.cleaned == ["youtube"]
+    assert not video.exists()
+
+
+def test_oversized_rumble_recording_uses_platform_specific_parts(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = config_for(tmp_path, monkeypatch)
+    rumble_config = replace(
+        config.platforms.rumble,
+        max_file_size_gb=0.00000001,
+    )
+    config = replace(
+        config,
+        platforms=replace(config.platforms, rumble=rumble_config),
+        splitting=replace(config.splitting, rumble_target_size_gb=0.000000009),
+    )
+    video, metadata = make_recording(config.paths.recordings_root)
+    video.write_bytes(b"x" * 20)
+    rumble = FakeUploader("rumble", config.retry)
+    splitter = FakeMediaSplitter()
+
+    with StateStore(config.paths.database) as store:
+        process_ready_recording(
+            video,
+            metadata,
+            3600,
+            config,
+            store,
+            {"rumble": rumble},
+            media_splitter=splitter,
+        )
+        parent = store.get_status(video, "rumble")
+
+    assert parent is not None
+    assert parent.status is UploadStatus.SUCCESS
+    assert len(rumble.uploaded) == 2
+    assert all(len(title) <= 90 for title in rumble.titles)
+    assert splitter.created_for == ["rumble"]
+    assert splitter.cleaned == ["rumble"]
+
+
+def test_multipart_restart_retries_only_failed_part(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = config_for(tmp_path, monkeypatch)
+    config = replace(
+        config,
+        platforms=replace(
+            config.platforms,
+            rumble=replace(
+                config.platforms.rumble,
+                max_file_size_gb=0.00000001,
+            ),
+        ),
+        splitting=replace(config.splitting, rumble_target_size_gb=0.000000009),
+    )
+    video, metadata = make_recording(config.paths.recordings_root)
+    video.write_bytes(b"x" * 20)
+    rumble = SequencedUploader(
+        "rumble",
+        config.retry,
+        [
+            UploadResult(True, "part-1", "https://rumble.test/part-1"),
+            UploadResult(False, error_message="temporary failure"),
+            UploadResult(True, "part-2", "https://rumble.test/part-2"),
+        ],
+    )
+    splitter = FakeMediaSplitter()
+
+    with StateStore(config.paths.database) as store:
+        process_ready_recording(
+            video,
+            metadata,
+            3600,
+            config,
+            store,
+            {"rumble": rumble},
+            media_splitter=splitter,
+        )
+        first_cycle = store.get_part_statuses(video, "rumble")
+        assert [record.status for record in first_cycle] == [
+            UploadStatus.SUCCESS,
+            UploadStatus.FAILED,
+        ]
+        assert video.is_file()
+
+        process_ready_recording(
+            video,
+            metadata,
+            3600,
+            config,
+            store,
+            {"rumble": rumble},
+            media_splitter=splitter,
+        )
+        second_cycle = store.get_part_statuses(video, "rumble")
+        assert [record.status for record in second_cycle] == [
+            UploadStatus.SUCCESS,
+            UploadStatus.SUCCESS,
+        ]
+
+    assert [path.name for path in rumble.uploaded] == [
+        "part_001.mkv",
+        "part_002.mkv",
+        "part_002.mkv",
+    ]
     assert not video.exists()
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import signal
 import sys
@@ -20,10 +21,16 @@ from duration_check import (
     probe_duration_seconds,
 )
 from meta_parser import StreamMetadata
+from media_splitter import MediaSplitter, SplitConstraints, SplitPlan
 from mover import move_processed_recording
 from recording_name_normalizer import normalize_recording_set_for_cda
-from state import StateStore, UploadStatus
-from title_cleaner import title_from_metadata
+from state import (
+    StateStore,
+    UploadPartSpec,
+    UploadPartStatusRecord,
+    UploadStatus,
+)
+from title_cleaner import title_from_metadata, title_from_metadata_part
 from uploaders.base import BaseUploader
 from uploaders.cda import CDAUploader
 from uploaders.rumble import RumbleUploader, _is_file_size_limit_error
@@ -147,6 +154,26 @@ def build_description(metadata: StreamMetadata, duration_seconds: float) -> str:
     return "\n".join(lines)
 
 
+def build_part_description(
+    metadata: StreamMetadata,
+    source_duration_seconds: float,
+    part_index: int,
+    total_parts: int,
+    start_seconds: float,
+    end_seconds: float,
+) -> str:
+    return "\n".join(
+        (
+            build_description(metadata, source_duration_seconds),
+            f"Part: {part_index}/{total_parts}",
+            (
+                f"Source time range: {_format_duration(start_seconds)} - "
+                f"{_format_duration(end_seconds)}"
+            ),
+        )
+    )
+
+
 def build_tags(metadata: StreamMetadata) -> list[str]:
     tags = [metadata.channel, "Twitch", "stream"]
     if metadata.game:
@@ -160,6 +187,60 @@ def _platform_limit(config: Config, platform: str) -> float | None:
 
 def _platform_title_limit(config: Config, platform: str) -> int | None:
     return getattr(config.platforms, platform).title_limit
+
+
+def _decimal_gigabytes(value: float) -> int:
+    return int(value * 1_000_000_000)
+
+
+def _requires_multipart(
+    video_path: Path,
+    duration_seconds: float,
+    config: Config,
+    platform: str,
+) -> bool:
+    if not config.splitting.enabled:
+        return False
+    size = video_path.stat().st_size
+    if platform == "youtube":
+        youtube = config.platforms.youtube
+        return (
+            duration_seconds > youtube.max_duration_hours * 3600
+            or size > _decimal_gigabytes(youtube.max_file_size_gb)
+        )
+    if platform == "rumble":
+        limit = config.platforms.rumble.max_file_size_gb
+        return limit is not None and size > _decimal_gigabytes(limit)
+    return False
+
+
+def _split_constraints(config: Config, platform: str) -> SplitConstraints:
+    if platform == "youtube":
+        return SplitConstraints(
+            hard_max_duration_seconds=(
+                config.platforms.youtube.max_duration_hours * 3600
+            ),
+            target_duration_seconds=(
+                config.splitting.youtube_target_duration_hours * 3600
+            ),
+            hard_max_size_bytes=_decimal_gigabytes(
+                config.platforms.youtube.max_file_size_gb
+            ),
+            target_size_bytes=_decimal_gigabytes(
+                config.splitting.youtube_target_size_gb
+            ),
+        )
+    if platform == "rumble":
+        hard_limit = config.platforms.rumble.max_file_size_gb
+        if hard_limit is None:
+            raise ValueError("Rumble max_file_size_gb is not configured")
+        return SplitConstraints(
+            hard_max_size_bytes=_decimal_gigabytes(hard_limit),
+            target_size_bytes=_decimal_gigabytes(
+                config.splitting.rumble_target_size_gb
+            ),
+        )
+    raise ValueError(f"Multipart upload is not supported for {platform}")
 
 
 def _mark_exception_failed(
@@ -238,6 +319,345 @@ def _youtube_finalization_complete(
     return True
 
 
+def _youtube_part_finalization_complete(
+    video_path: Path,
+    metadata: StreamMetadata,
+    record: UploadPartStatusRecord,
+    config: Config,
+    state_store: StateStore,
+    uploader: BaseUploader,
+    *,
+    retry_missing: bool,
+) -> tuple[bool, str | None]:
+    video_id = record.platform_video_id or ""
+    if not video_id:
+        return False, f"YouTube part {record.part_index} has no video ID"
+
+    captions_required = getattr(uploader, "captions_required", None)
+    upload_captions = getattr(uploader, "upload_captions", None)
+    needs_captions = bool(
+        record.srt_path
+        and callable(captions_required)
+        and captions_required(record.srt_path)
+    )
+    if needs_captions and not record.captions_uploaded:
+        if not retry_missing:
+            return False, "YouTube part captions require a later retry"
+        if not callable(upload_captions):
+            return False, "YouTube uploader cannot retry multipart captions"
+        caption_result = upload_captions(video_id, record.srt_path)
+        if not caption_result.success:
+            return (
+                False,
+                caption_result.error_message
+                or f"Captions failed for YouTube part {record.part_index}",
+            )
+        state_store.mark_part_captions_uploaded(
+            video_path,
+            "youtube",
+            record.part_index,
+        )
+        refreshed = state_store.get_part_status(
+            video_path,
+            "youtube",
+            record.part_index,
+        )
+        if refreshed is not None:
+            record = refreshed
+
+    playlist_configured = metadata.channel in config.platforms.youtube.playlists
+    if playlist_configured and not record.playlist_added:
+        if not retry_missing:
+            return False, "YouTube part playlist addition requires a later retry"
+        playlist_id = config.platforms.youtube.playlists[metadata.channel]
+        if not uploader.add_to_playlist(
+            video_id,
+            playlist_id,
+            playlist_title=metadata.channel,
+        ):
+            return (
+                False,
+                f"Could not add YouTube part {record.part_index} to playlist",
+            )
+        state_store.mark_part_playlist_added(
+            video_path,
+            "youtube",
+            record.part_index,
+        )
+    return True, None
+
+
+def _multipart_specs(plan: SplitPlan) -> list[UploadPartSpec]:
+    total = len(plan.parts)
+    return [
+        UploadPartSpec(
+            index=part.index,
+            total_parts=total,
+            part_path=part.path,
+            srt_path=part.srt_path,
+            start_seconds=part.start_seconds,
+            end_seconds=part.end_seconds,
+        )
+        for part in plan.parts
+    ]
+
+
+def _multipart_parent_identifier(
+    records: Sequence[UploadPartStatusRecord],
+) -> str:
+    return json.dumps(
+        [
+            {
+                "part": record.part_index,
+                "id_or_url": record.platform_video_id,
+            }
+            for record in records
+        ],
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+
+
+def _process_multipart_platform(
+    video_path: Path,
+    metadata: StreamMetadata,
+    duration_seconds: float,
+    config: Config,
+    state_store: StateStore,
+    platform: str,
+    uploader: BaseUploader,
+    splitter: MediaSplitter,
+    srt_path: Path | None,
+) -> tuple[bool, SplitPlan]:
+    """Create/reuse parts and upload only unfinished ones for one platform."""
+    plan = splitter.create_plan(
+        video_path,
+        platform,
+        duration_seconds,
+        _split_constraints(config, platform),
+        srt_path=srt_path,
+    )
+    state_store.sync_upload_parts(
+        video_path,
+        platform,
+        _multipart_specs(plan),
+    )
+    parent = state_store.get_status(video_path, platform)
+    if parent is not None and parent.status is UploadStatus.SKIPPED:
+        state_store.reopen_for_multipart(video_path, platform)
+
+    total = len(plan.parts)
+    failure_message: str | None = None
+    for part in plan.parts:
+        record = state_store.get_part_status(
+            video_path,
+            platform,
+            part.index,
+        )
+        if record is None:  # pragma: no cover - sync safeguard
+            raise RuntimeError(f"Missing state for {platform} part {part.index}")
+
+        if record.status is UploadStatus.SUCCESS:
+            if platform == "youtube":
+                complete, error = _youtube_part_finalization_complete(
+                    video_path,
+                    metadata,
+                    record,
+                    config,
+                    state_store,
+                    uploader,
+                    retry_missing=True,
+                )
+                if not complete:
+                    failure_message = error
+                    logger.error(
+                        "youtube: part %d/%d finalization failed: %s",
+                        part.index,
+                        total,
+                        error,
+                    )
+            continue
+        if record.status is UploadStatus.SKIPPED:
+            continue
+        if (
+            record.status is UploadStatus.FAILED
+            and (record.last_error or "").startswith(NO_AUTO_RETRY_PREFIX)
+        ):
+            logger.warning(
+                "%s: part %d/%d requires manual verification; not retrying: %s",
+                platform,
+                part.index,
+                total,
+                record.last_error,
+            )
+            continue
+
+        title = title_from_metadata_part(
+            metadata,
+            config.metadata.title_template,
+            _platform_title_limit(config, platform),
+            part.index,
+            total,
+        )
+        description = build_part_description(
+            metadata,
+            duration_seconds,
+            part.index,
+            total,
+            part.start_seconds,
+            part.end_seconds,
+        )
+        logger.info(
+            "%s: processing part %d/%d (%s, %d bytes, %s-%s)",
+            platform,
+            part.index,
+            total,
+            part.path,
+            part.size_bytes,
+            _format_duration(part.start_seconds),
+            _format_duration(part.end_seconds),
+        )
+        state_store.mark_part_in_progress(
+            video_path,
+            platform,
+            part.index,
+        )
+        result = uploader.upload(
+            part.path,
+            title,
+            description,
+            build_tags(metadata),
+            part.srt_path,
+        )
+        if result.skipped:
+            reason = (
+                result.error_message
+                or f"{platform} intentionally skipped part {part.index}"
+            )
+            state_store.mark_part_skipped(
+                video_path,
+                platform,
+                part.index,
+                reason,
+            )
+            logger.warning(
+                "%s: part %d/%d skipped: %s",
+                platform,
+                part.index,
+                total,
+                reason,
+            )
+            continue
+        if not result.success:
+            error = result.error_message or "Uploader returned success=False"
+            if not result.retry_allowed:
+                error = f"{NO_AUTO_RETRY_PREFIX}{error}"
+            state_store.mark_part_failed(
+                video_path,
+                platform,
+                part.index,
+                error,
+            )
+            failure_message = error
+            logger.error(
+                "%s: part %d/%d failed: %s",
+                platform,
+                part.index,
+                total,
+                error,
+            )
+            continue
+
+        stored_identifier = (
+            result.platform_url
+            if platform in {"cda", "rumble"} and result.platform_url
+            else result.platform_video_id
+        )
+        state_store.mark_part_success(
+            video_path,
+            platform,
+            part.index,
+            stored_identifier,
+        )
+        if result.captions_uploaded:
+            state_store.mark_part_captions_uploaded(
+                video_path,
+                platform,
+                part.index,
+            )
+        if (
+            platform == "youtube"
+            and metadata.channel in config.platforms.youtube.playlists
+        ):
+            playlist_id = config.platforms.youtube.playlists[metadata.channel]
+            if uploader.add_to_playlist(
+                result.platform_video_id or "",
+                playlist_id,
+                playlist_title=metadata.channel,
+            ):
+                state_store.mark_part_playlist_added(
+                    video_path,
+                    platform,
+                    part.index,
+                )
+            else:
+                failure_message = (
+                    f"Could not add YouTube part {part.index} to playlist"
+                )
+
+    require_playlist = (
+        platform == "youtube"
+        and metadata.channel in config.platforms.youtube.playlists
+    )
+    complete = state_store.are_parts_fully_processed(
+        video_path,
+        platform,
+        require_captions=platform == "youtube",
+        require_playlist=require_playlist,
+    )
+    if not complete:
+        if failure_message:
+            current_parent = state_store.get_status(video_path, platform)
+            if (
+                current_parent is None
+                or current_parent.status is not UploadStatus.SUCCESS
+            ):
+                state_store.mark_failed(
+                    video_path,
+                    platform,
+                    failure_message,
+                )
+        return False, plan
+
+    records = state_store.get_part_statuses(video_path, platform)
+    state_store.mark_success(
+        video_path,
+        platform,
+        _multipart_parent_identifier(records),
+    )
+    if platform == "youtube":
+        nonempty_srt_records = [
+            record
+            for record in records
+            if record.srt_path
+            and record.srt_path.is_file()
+            and record.srt_path.stat().st_size > 0
+        ]
+        if (
+            nonempty_srt_records
+            and all(record.captions_uploaded for record in nonempty_srt_records)
+        ):
+            state_store.mark_captions_uploaded(video_path, platform)
+        if require_playlist:
+            state_store.mark_playlist_added(video_path, platform)
+    logger.info(
+        "%s: all %d multipart uploads completed",
+        platform,
+        total,
+    )
+    return True, plan
+
+
 def process_ready_recording(
     video_path: Path,
     metadata: StreamMetadata,
@@ -245,6 +665,8 @@ def process_ready_recording(
     config: Config,
     state_store: StateStore,
     uploaders: Mapping[str, BaseUploader],
+    *,
+    media_splitter: MediaSplitter | None = None,
 ) -> None:
     """Process one ready recording while isolating each platform."""
     if (
@@ -264,12 +686,56 @@ def process_ready_recording(
     description = build_description(metadata, duration_seconds)
     tags = build_tags(metadata)
     srt_path = _srt_path(video_path)
+    if media_splitter is None:
+        cancel_event = next(
+            (
+                uploader.cancel_event
+                for uploader in uploaders.values()
+                if uploader.cancel_event is not None
+            ),
+            None,
+        )
+        media_splitter = MediaSplitter(
+            ffmpeg_path=config.paths.ffmpeg,
+            work_directory_name=config.splitting.work_directory_name,
+            max_replans=config.splitting.max_replans,
+            disk_space_multiplier=config.splitting.disk_space_multiplier,
+            cancel_event=cancel_event,
+        )
+    multipart_plans: list[SplitPlan] = []
     youtube_uploaded_this_cycle = False
     youtube_finalization_complete = True
 
     for platform, uploader in uploaders.items():
         try:
             current = state_store.get_status(video_path, platform)
+            needs_multipart = _requires_multipart(
+                video_path,
+                duration_seconds,
+                config,
+                platform,
+            )
+            existing_parts = state_store.get_part_statuses(video_path, platform)
+            if needs_multipart and (
+                current is None
+                or current.status is not UploadStatus.SUCCESS
+                or bool(existing_parts)
+            ):
+                complete, plan = _process_multipart_platform(
+                    video_path,
+                    metadata,
+                    duration_seconds,
+                    config,
+                    state_store,
+                    platform,
+                    uploader,
+                    media_splitter,
+                    srt_path,
+                )
+                multipart_plans.append(plan)
+                if platform == "youtube" and not complete:
+                    youtube_finalization_complete = False
+                continue
             if current is not None and current.status is UploadStatus.SUCCESS:
                 if platform == "youtube":
                     youtube_finalization_complete = _youtube_finalization_complete(
@@ -404,6 +870,14 @@ def process_ready_recording(
     )
     if move_result.moved:
         logger.info("Moved processed recording to %s", move_result.destination)
+        if not config.splitting.keep_parts_after_success:
+            for plan in multipart_plans:
+                media_splitter.cleanup(plan)
+                logger.info(
+                    "Removed completed %s split work files from %s",
+                    plan.platform,
+                    plan.work_directory,
+                )
     for warning in move_result.warnings:
         logger.warning("Mover: %s", warning)
 
