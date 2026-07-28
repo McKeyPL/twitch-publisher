@@ -132,6 +132,11 @@ class FakeMediaSplitter:
         self.cleaned.append(plan.platform)
 
 
+class FailingMediaSplitter(FakeMediaSplitter):
+    def create_plan(self, *args, **kwargs):
+        raise RuntimeError("FFmpeg rejected a timed metadata stream")
+
+
 class SequencedUploader(FakeUploader):
     def __init__(self, name: str, retry_config, results: list[UploadResult]) -> None:
         super().__init__(name, retry_config)
@@ -433,6 +438,45 @@ def test_multipart_restart_retries_only_failed_part(
         "part_002.mkv",
     ]
     assert not video.exists()
+
+
+def test_old_rumble_skip_is_reopened_before_splitter_failure(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = config_for(tmp_path, monkeypatch)
+    config = replace(
+        config,
+        platforms=replace(
+            config.platforms,
+            rumble=replace(
+                config.platforms.rumble,
+                max_file_size_gb=0.00000001,
+            ),
+        ),
+        splitting=replace(config.splitting, rumble_target_size_gb=0.000000009),
+    )
+    video, metadata = make_recording(config.paths.recordings_root)
+    video.write_bytes(b"x" * 20)
+    rumble = FakeUploader("rumble", config.retry)
+
+    with StateStore(config.paths.database) as store:
+        store.mark_skipped(video, "rumble", "old 15 GB size-limit skip")
+        process_ready_recording(
+            video,
+            metadata,
+            3600,
+            config,
+            store,
+            {"rumble": rumble},
+            media_splitter=FailingMediaSplitter(),
+        )
+        record = store.get_status(video, "rumble")
+
+    assert record is not None
+    assert record.status is UploadStatus.FAILED
+    assert "timed metadata stream" in (record.last_error or "")
+    assert video.is_file()
 
 
 def test_successful_video_retries_only_missing_captions_on_next_cycle(

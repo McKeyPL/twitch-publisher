@@ -178,7 +178,9 @@ YouTube and Rumble use separate plans. For example, a 10-hour, 20 GB recording i
 uploaded once to YouTube but split only for Rumble. FFmpeg uses stream copy
 (`-c copy`), so video/audio are not re-encoded. Segment boundaries move to valid
 keyframes; the publisher reads FFmpeg's actual CSV boundaries instead of assuming
-the requested time.
+the requested time. Only video, audio, and subtitle streams are mapped to the
+Matroska parts; transport metadata such as `timed_id3` is intentionally excluded
+because Matroska cannot store it.
 
 Chat captions are split from those actual boundaries. A cue crossing a boundary
 is clipped into both neighboring parts, timestamps are reset to zero, UTF-8 and

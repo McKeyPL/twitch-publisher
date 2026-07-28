@@ -300,3 +300,10 @@ def test_ffmpeg_command_uses_stream_copy_and_segment_csv(tmp_path: Path) -> None
     command = process.call_args.args[0]
     assert command[command.index("-c") + 1] == "copy"
     assert command[command.index("-segment_list_type") + 1] == "csv"
+    mapped_streams = [
+        command[index + 1]
+        for index, argument in enumerate(command)
+        if argument == "-map"
+    ]
+    assert mapped_streams == ["0:v?", "0:a?", "0:s?"]
+    assert "0" not in mapped_streams

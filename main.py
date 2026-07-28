@@ -251,6 +251,18 @@ def _mark_exception_failed(
 ) -> None:
     message = f"Unexpected uploader error: {exc}"
     try:
+        current = state_store.get_status(video_path, platform)
+        if current is not None and current.status in {
+            UploadStatus.SUCCESS,
+            UploadStatus.SKIPPED,
+        }:
+            logger.error(
+                "%s: %s; preserving terminal status %s",
+                platform,
+                message,
+                current.status.value,
+            )
+            return
         state_store.mark_failed(video_path, platform, message)
     except Exception:
         logger.exception("Could not store FAILED status for %s/%s", video_path, platform)
@@ -430,6 +442,9 @@ def _process_multipart_platform(
     srt_path: Path | None,
 ) -> tuple[bool, SplitPlan]:
     """Create/reuse parts and upload only unfinished ones for one platform."""
+    parent = state_store.get_status(video_path, platform)
+    if parent is not None and parent.status is UploadStatus.SKIPPED:
+        state_store.reopen_for_multipart(video_path, platform)
     plan = splitter.create_plan(
         video_path,
         platform,
@@ -442,10 +457,6 @@ def _process_multipart_platform(
         platform,
         _multipart_specs(plan),
     )
-    parent = state_store.get_status(video_path, platform)
-    if parent is not None and parent.status is UploadStatus.SKIPPED:
-        state_store.reopen_for_multipart(video_path, platform)
-
     total = len(plan.parts)
     failure_message: str | None = None
     for part in plan.parts:
