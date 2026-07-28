@@ -253,6 +253,25 @@ def _optional_string(value: Any, location: str) -> str | None:
     return result or None
 
 
+def _safe_directory_name(value: str, location: str) -> str:
+    """Validate one directory component using Windows and POSIX semantics."""
+    name = _string(value, location)
+    windows = PureWindowsPath(name)
+    posix = PurePosixPath(name)
+    if (
+        windows.is_absolute()
+        or posix.is_absolute()
+        or bool(windows.drive)
+        or len(windows.parts) != 1
+        or len(posix.parts) != 1
+        or name in {".", ".."}
+        or "/" in name
+        or "\\" in name
+    ):
+        raise ConfigError(f"{location} must be one safe directory name")
+    return name
+
+
 def _path(value: Any, location: str, *, allow_empty: bool = False) -> Path | None:
     text = _string(value, location, allow_empty=allow_empty)
     if not text and allow_empty:
@@ -552,7 +571,7 @@ def config_from_dict(raw: Mapping[str, Any]) -> Config:
                 _required(splitting, "enabled", "splitting"),
                 "splitting.enabled",
             ),
-            work_directory_name=_string(
+            work_directory_name=_safe_directory_name(
                 _required(splitting, "work_directory_name", "splitting"),
                 "splitting.work_directory_name",
             ),
@@ -609,15 +628,6 @@ def config_from_dict(raw: Mapping[str, Any]) -> Config:
         raise ConfigError(
             "splitting.rumble_target_size_gb cannot exceed "
             "platforms.rumble.max_file_size_gb"
-        )
-    work_name = config.splitting.work_directory_name
-    if (
-        Path(work_name).is_absolute()
-        or len(Path(work_name).parts) != 1
-        or work_name in {".", ".."}
-    ):
-        raise ConfigError(
-            "splitting.work_directory_name must be one safe directory name"
         )
     return config
 

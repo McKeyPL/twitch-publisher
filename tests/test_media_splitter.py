@@ -20,6 +20,28 @@ def make_source(tmp_path: Path, size: int = 1_000) -> Path:
     return source
 
 
+@pytest.mark.parametrize(
+    "invalid",
+    (
+        "../work",
+        r"..\work",
+        r"C:\work",
+        r"C:work",
+        "/tmp/work",
+        r"\\server\share",
+        "work/subdirectory",
+        r"work\subdirectory",
+        ".",
+        "..",
+    ),
+)
+def test_work_directory_must_be_one_cross_platform_safe_name(
+    invalid: str,
+) -> None:
+    with pytest.raises(ValueError, match="one safe directory name"):
+        MediaSplitter(work_directory_name=invalid)
+
+
 def emit_parts(
     work_directory: Path,
     rows: list[tuple[str, float, float, int]],

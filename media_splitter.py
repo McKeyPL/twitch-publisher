@@ -12,7 +12,7 @@ import shutil
 import subprocess
 import threading
 from dataclasses import asdict, dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Callable
 
 from duration_check import probe_duration_seconds
@@ -108,11 +108,18 @@ class MediaSplitter:
         duration_probe: Callable[[Path], float] | None = None,
     ) -> None:
         work_name = work_directory_name.strip()
+        windows_work_name = PureWindowsPath(work_name)
+        posix_work_name = PurePosixPath(work_name)
         if (
             not work_name
-            or Path(work_name).is_absolute()
-            or len(Path(work_name).parts) != 1
+            or windows_work_name.is_absolute()
+            or posix_work_name.is_absolute()
+            or bool(windows_work_name.drive)
+            or len(windows_work_name.parts) != 1
+            or len(posix_work_name.parts) != 1
             or work_name in {".", ".."}
+            or "/" in work_name
+            or "\\" in work_name
         ):
             raise ValueError("work_directory_name must be one safe directory name")
         if max_replans < 0:

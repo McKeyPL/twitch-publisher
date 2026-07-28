@@ -174,7 +174,18 @@ class ConfigValidationTests(unittest.TestCase):
             config_from_dict(raw)
 
     def test_rejects_unsafe_split_work_directory(self) -> None:
-        for invalid in ("../work", r"C:\work", "."):
+        for invalid in (
+            "../work",
+            r"..\work",
+            r"C:\work",
+            r"C:work",
+            "/tmp/work",
+            r"\\server\share",
+            "work/subdirectory",
+            r"work\subdirectory",
+            ".",
+            "..",
+        ):
             with self.subTest(value=invalid):
                 raw = valid_raw_config()
                 raw["splitting"]["work_directory_name"] = invalid
