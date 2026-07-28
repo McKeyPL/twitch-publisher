@@ -199,10 +199,13 @@ class YouTubeUploader(BaseUploader):
             return False
         return usable_srt is not None
 
-    def _reserve_caption_quota(self) -> tuple[bool, str | None]:
+    def _reserve_general_quota(
+        self,
+        cost: int,
+        operation: str,
+    ) -> tuple[bool, str | None]:
         period, next_reset = _pacific_quota_window()
         bucket = "youtube_general"
-        cost = self.config.captions_quota_units
         limit = self.config.daily_quota_units
         reserved, usage = self.state_store.try_reserve_quota(
             bucket,
@@ -212,7 +215,7 @@ class YouTubeUploader(BaseUploader):
         )
         if not reserved:
             message = (
-                "Local YouTube quota limit for captions.insert would be exceeded: "
+                f"Local YouTube quota limit for {operation} would be exceeded: "
                 f"used {usage}/{limit}, operation requires {cost}. "
                 f"Next reset at Pacific Time midnight: {next_reset.isoformat()} "
                 f"({next_reset.astimezone(timezone.utc).isoformat()} UTC)."
@@ -220,13 +223,20 @@ class YouTubeUploader(BaseUploader):
             logger.error(message)
             return False, message
         logger.info(
-            "YouTube: reserved %d for captions.insert (%d/%d, PT period %s)",
+            "YouTube: reserved %d for %s (%d/%d, PT period %s)",
             cost,
+            operation,
             usage,
             limit,
             period,
         )
         return True, None
+
+    def _reserve_caption_quota(self) -> tuple[bool, str | None]:
+        return self._reserve_general_quota(
+            self.config.captions_quota_units,
+            "captions.insert",
+        )
 
     def upload_captions(
         self,
@@ -459,6 +469,12 @@ class YouTubeUploader(BaseUploader):
         )
 
     def _create_playlist(self, playlist_title: str) -> str:
+        quota_ok, quota_error = self._reserve_general_quota(
+            50,
+            "playlists.insert",
+        )
+        if not quota_ok:
+            raise RuntimeError(quota_error)
         request = self._get_service().playlists().insert(
             part="snippet,status",
             body={
@@ -503,6 +519,13 @@ class YouTubeUploader(BaseUploader):
         playlist_id = playlist_identifier.strip()
         try:
             if playlist_id:
+                quota_ok, quota_error = self._reserve_general_quota(
+                    1,
+                    "playlists.list",
+                )
+                if not quota_ok:
+                    logger.error("%s", quota_error)
+                    return False
                 lookup = self._get_service().playlists().list(
                     part="id",
                     id=playlist_id,
@@ -525,6 +548,13 @@ class YouTubeUploader(BaseUploader):
                     return False
                 playlist_id = self._create_playlist(playlist_title.strip())
 
+            quota_ok, quota_error = self._reserve_general_quota(
+                50,
+                "playlistItems.insert",
+            )
+            if not quota_ok:
+                logger.error("%s", quota_error)
+                return False
             insert = self._get_service().playlistItems().insert(
                 part="snippet",
                 body={

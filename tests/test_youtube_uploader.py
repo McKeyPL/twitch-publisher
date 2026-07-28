@@ -454,9 +454,32 @@ def test_creates_playlist_when_identifier_is_empty(
                 "",
                 playlist_title="mrozopl",
             )
+        period, _ = _pacific_quota_window()
+        assert store.get_quota_usage("youtube_general", period) == 100
 
     assert added is True
     assert "YT_PLAYLIST_MROZOPL=new-playlist-id" in caplog.text
     playlist_item_body = service.playlistItems.return_value.insert.call_args.kwargs["body"]
     assert playlist_item_body["snippet"]["playlistId"] == "new-playlist-id"
     assert playlist_item_body["snippet"]["resourceId"]["videoId"] == "video123"
+
+
+def test_playlist_lookup_and_insert_reserve_general_quota(
+    tmp_path: Path,
+    youtube_config: YouTubeConfig,
+    retry_config: RetryConfig,
+) -> None:
+    service = MagicMock()
+    lookup = MagicMock()
+    lookup.execute.return_value = {"items": [{"id": "playlist-id"}]}
+    service.playlists.return_value.list.return_value = lookup
+    insert = MagicMock()
+    insert.execute.return_value = {"id": "playlist-item"}
+    service.playlistItems.return_value.insert.return_value = insert
+
+    with StateStore(tmp_path / "state.sqlite3") as store:
+        uploader = YouTubeUploader(youtube_config, retry_config, store)
+        uploader._service = service
+        assert uploader.add_to_playlist("video-id", "playlist-id") is True
+        period, _ = _pacific_quota_window()
+        assert store.get_quota_usage("youtube_general", period) == 51
