@@ -41,7 +41,13 @@ _ALIASES = {
 
 _PROCESSING_MARKERS = (
     "video editing is in progress",
+    "editing video",
+    "still processing",
     "processing your edits",
+    "edytuję film",
+    "edytuje film",
+    "wciąż przetwarzam",
+    "wciaz przetwarzam",
     "trwa edytowanie filmu",
     "przetwarzanie zmian",
 )
@@ -60,7 +66,7 @@ _CLAIM_UI_READY_SCRIPT = r"""
   );
   if (rows) return true;
   const text = (document.body && document.body.innerText || '').toLowerCase();
-  return /video editing is in progress|processing your edits|trwa edytowanie filmu|przetwarzanie zmian/.test(text);
+  return /video editing is in progress|editing video|still processing|processing your edits|edytuję film|edytuje film|wciąż przetwarzam|wciaz przetwarzam|trwa edytowanie filmu|przetwarzanie zmian/.test(text);
 }
 """
 

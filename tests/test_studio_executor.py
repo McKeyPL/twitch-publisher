@@ -180,6 +180,18 @@ def test_inspection_extracts_claims_and_processing_state(tmp_path: Path) -> None
     assert "wait_for_claim_ui" in page.events
 
 
+def test_inspection_recognizes_new_polish_processing_screen(tmp_path: Path) -> None:
+    page = FakePage(tmp_path, {})
+    page.body_text = "Edytuję film… Ten proces może chwilę potrwać. Wciąż przetwarzam"
+
+    inspection = StudioCopyrightExecutor(page, _diagnostic(tmp_path)).inspect(
+        "video123"
+    )
+
+    assert inspection.processing
+    assert inspection.claims == ()
+
+
 def test_inspection_refuses_to_treat_unfinished_claim_request_as_empty(
     tmp_path: Path,
 ) -> None:
