@@ -65,42 +65,47 @@ def run(
     def request_stop(signum: int, frame: object) -> None:
         logger.info("Received signal %s; stopping the copyright guard", signum)
         stop_event.set()
+        if signum == getattr(signal, "SIGINT", None):
+            raise KeyboardInterrupt
 
     for signal_name in ("SIGINT", "SIGTERM"):
         if hasattr(signal, signal_name):
             signal.signal(getattr(signal, signal_name), request_stop)
 
-    with (
-        StateStore(config.paths.database) as quota_store,
-        CopyrightStateStore(config.paths.database) as copyright_store,
-    ):
-        service = CopyrightGuardService(
-            config,
-            copyright_store,
-            quota_store,
-            stop_event=stop_event,
-        )
-        while not stop_event.is_set():
-            try:
-                result = service.run_cycle(
-                    video_ids=video_ids or None,
-                    include_channel_uploads=not video_ids,
-                )
-                logger.info(
-                    "Copyright cycle %s finished: checked=%d actionable=%d ignored=%d missing=%d",
-                    result.run_id,
-                    result.videos_checked,
-                    len(result.actionable_video_ids),
-                    len(result.ignored_video_ids),
-                    len(result.missing_video_ids),
-                )
-            except Exception:
-                logger.exception("Copyright guard cycle failed; the next cycle will retry")
+    try:
+        with (
+            StateStore(config.paths.database) as quota_store,
+            CopyrightStateStore(config.paths.database) as copyright_store,
+        ):
+            service = CopyrightGuardService(
+                config,
+                copyright_store,
+                quota_store,
+                stop_event=stop_event,
+            )
+            while not stop_event.is_set():
+                try:
+                    result = service.run_cycle(
+                        video_ids=video_ids or None,
+                        include_channel_uploads=not video_ids,
+                    )
+                    logger.info(
+                        "Copyright cycle %s finished: checked=%d actionable=%d ignored=%d missing=%d",
+                        result.run_id,
+                        result.videos_checked,
+                        len(result.actionable_video_ids),
+                        len(result.ignored_video_ids),
+                        len(result.missing_video_ids),
+                    )
+                except Exception:
+                    logger.exception("Copyright guard cycle failed; the next cycle will retry")
+                    if once:
+                        return 1
                 if once:
-                    return 1
-            if once:
-                return 0
-            stop_event.wait(config.youtube_copyright.interval_hours * 3600)
+                    return 0
+                stop_event.wait(config.youtube_copyright.interval_hours * 3600)
+    except KeyboardInterrupt:
+        logger.info("Copyright Guard was interrupted by the user")
     return 0
 
 

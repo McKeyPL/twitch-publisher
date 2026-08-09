@@ -37,6 +37,12 @@ def choose_action(
         for action in actions
     ):
         return PolicyDecision(None, "A previous Studio edit is still processing", wait_for_processing=True)
+    if any(action.state is ActionState.UNCERTAIN for action in actions):
+        return PolicyDecision(
+            None,
+            "A previous edit was interrupted after its result became uncertain",
+            manual_required=True,
+        )
 
     available = set(claim.available_actions)
 

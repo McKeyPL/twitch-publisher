@@ -63,6 +63,16 @@ def test_policy_waits_for_submitted_edit(tmp_path: Path) -> None:
     assert decision.wait_for_processing
 
 
+def test_policy_never_retries_an_uncertain_interrupted_action(tmp_path: Path) -> None:
+    decision = choose_action(
+        _claim(),
+        [_action(RemediationAction.ERASE_SONG, ActionState.UNCERTAIN)],
+        _config(tmp_path),
+    )
+    assert decision.action is None
+    assert decision.manual_required
+
+
 def test_visual_claim_uses_trim_and_strike_is_manual(tmp_path: Path) -> None:
     config = _config(tmp_path)
     assert choose_action(_claim(ClaimType.VISUAL), [], config).action is RemediationAction.TRIM

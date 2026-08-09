@@ -439,6 +439,23 @@ class CopyrightGuardService:
             )
             logger.error("YouTube Studio authentication required: %s", exc)
             return False
+        except KeyboardInterrupt:
+            if action_record is not None and action_record.id is not None:
+                self.copyright_store.update_action(
+                    action_record.id,
+                    ActionState.UNCERTAIN,
+                    error_message=(
+                        "SIGINT interrupted Studio automation; verify whether the final "
+                        "confirmation was accepted before resetting this action"
+                    ),
+                )
+            self.copyright_store.update_video_state(
+                video_id,
+                VideoState.MANUAL_REQUIRED,
+                last_error="Studio action outcome is uncertain after SIGINT",
+                next_check_at=next_check,
+            )
+            raise
         except Exception as exc:
             if action_record is not None and action_record.id is not None:
                 self.copyright_store.update_action(
