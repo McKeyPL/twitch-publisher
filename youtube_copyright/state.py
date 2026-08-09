@@ -270,6 +270,35 @@ class CopyrightStateStore:
         ).fetchall()
         return [self._video_from_row(row) for row in rows]
 
+    def update_video_state(
+        self,
+        video_id: str,
+        state: VideoState,
+        *,
+        processing: bool | None = None,
+        last_error: str | None = None,
+        next_check_at: datetime | None = None,
+    ) -> CopyrightVideo:
+        assignments = ["state = ?", "last_error = ?", "updated_at = ?"]
+        parameters: list[object] = [state.value, last_error, _serialize(_now())]
+        if processing is not None:
+            assignments.append("processing = ?")
+            parameters.append(int(processing))
+        if next_check_at is not None:
+            assignments.append("next_check_at = ?")
+            parameters.append(_serialize(next_check_at))
+        parameters.append(_video_id(video_id))
+        with self._require_connection():
+            cursor = self._require_connection().execute(
+                f"UPDATE youtube_copyright_video SET {', '.join(assignments)} WHERE video_id = ?",
+                parameters,
+            )
+            if cursor.rowcount != 1:
+                raise KeyError(f"Unknown copyright video {video_id!r}")
+        result = self.get_video(video_id)
+        assert result is not None
+        return result
+
     def publisher_video_ids(self) -> dict[str, str | None]:
         """Return successful YouTube IDs and their source paths from publisher tables."""
         connection = self._require_connection()
@@ -473,6 +502,18 @@ class CopyrightStateStore:
             (_video_id(video_id),),
         ).fetchone()
         return self._action_from_row(row) if row else None
+
+    def actions_for_video(
+        self, video_id: str, *, claim_fingerprint: str | None = None
+    ) -> list[CopyrightAction]:
+        sql = "SELECT * FROM youtube_copyright_action WHERE video_id = ?"
+        parameters: list[object] = [_video_id(video_id)]
+        if claim_fingerprint is not None:
+            sql += " AND claim_fingerprint = ?"
+            parameters.append(claim_fingerprint)
+        sql += " ORDER BY id"
+        rows = self._require_connection().execute(sql, parameters).fetchall()
+        return [self._action_from_row(row) for row in rows]
 
     @staticmethod
     def _video_from_row(row: sqlite3.Row) -> CopyrightVideo:

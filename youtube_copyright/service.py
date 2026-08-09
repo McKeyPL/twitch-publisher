@@ -15,9 +15,18 @@ from state import StateStore
 from youtube_api import YouTubeApiClient
 
 from .api_client import YouTubeCopyrightApi
+from .browser_session import StudioAuthRequired, StudioBrowserManager
 from .detector import classify_region_restriction
-from .models import CopyrightVideo, VideoState
+from .models import (
+    ActionState,
+    CopyrightAction,
+    CopyrightVideo,
+    RemediationAction,
+    VideoState,
+)
+from .policy import choose_action, validate_trim_ranges
 from .state import CopyrightStateStore
+from .studio_executor import StudioCopyrightExecutor
 
 
 logger = logging.getLogger(__name__)
@@ -130,6 +139,16 @@ class CopyrightGuardService:
                 )
                 processing = resource.processing_status not in {None, "succeeded"}
                 state = VideoState.PROCESSING if processing else decision.state
+                latest_action = self.copyright_store.latest_action(video_id)
+                if (
+                    not decision.actionable
+                    and latest_action is not None
+                    and latest_action.state in {ActionState.SUBMITTED, ActionState.PROCESSING}
+                ):
+                    self.copyright_store.update_action(
+                        latest_action.id, ActionState.SUCCEEDED
+                    )
+                    state = VideoState.RESOLVED
                 if resource.rejection_reason in {"claim", "copyright"}:
                     state = VideoState.MANUAL_REQUIRED
                 self.copyright_store.upsert_video(
@@ -164,12 +183,21 @@ class CopyrightGuardService:
                         decision.state.value,
                     )
 
+            submitted = 0
+            if mode != "report":
+                for video_id in actionable[: self.config.youtube_copyright.max_actions_per_cycle]:
+                    if self.stop_event.is_set():
+                        break
+                    if self._remediate_video(video_id, run_id):
+                        submitted += 1
+
             result = CycleResult(
                 run_id=run_id,
                 videos_checked=checked,
                 actionable_video_ids=tuple(actionable),
                 ignored_video_ids=tuple(ignored),
                 missing_video_ids=tuple(missing),
+                actions_submitted=submitted,
             )
             self.copyright_store.finish_run(
                 run_id,
@@ -186,3 +214,195 @@ class CopyrightGuardService:
                 error_message=str(exc),
             )
             raise
+
+    def _remediate_video(self, video_id: str, run_id: str) -> bool:
+        video = self.copyright_store.get_video(video_id)
+        if video is None:
+            return False
+        manager = StudioBrowserManager(
+            self.config.youtube_copyright.browser,
+            self.config.youtube_copyright.diagnostics,
+        )
+        action_record: CopyrightAction | None = None
+        next_check = datetime.now(timezone.utc) + timedelta(
+            hours=self.config.youtube_copyright.interval_hours
+        )
+        try:
+            with manager.open(run_id, video_id=video_id) as session:
+                executor = StudioCopyrightExecutor(session.page, session.diagnostic)
+                inspection = executor.inspect(video_id)
+                if inspection.processing:
+                    latest = self.copyright_store.latest_action(video_id)
+                    if latest and latest.state is ActionState.SUBMITTED:
+                        self.copyright_store.update_action(latest.id, ActionState.PROCESSING)
+                    self.copyright_store.update_video_state(
+                        video_id,
+                        VideoState.PROCESSING,
+                        processing=True,
+                        next_check_at=next_check,
+                    )
+                    return False
+
+                latest = self.copyright_store.latest_action(video_id)
+                if latest and latest.state in {ActionState.SUBMITTED, ActionState.PROCESSING}:
+                    self.copyright_store.update_action(
+                        latest.id,
+                        ActionState.SUCCEEDED,
+                        error_message=(
+                            "Studio processing ended, but the protected restriction remains"
+                        ),
+                    )
+
+                claims = [item.claim for item in inspection.claims]
+                self.copyright_store.replace_claims(video_id, claims)
+                if not inspection.claims:
+                    self.copyright_store.update_video_state(
+                        video_id,
+                        VideoState.AUTOMATION_UNAVAILABLE,
+                        last_error="Studio exposed no parseable Content ID claims",
+                        next_check_at=next_check,
+                    )
+                    return False
+
+                parsed_claim = _select_claim(inspection.claims)
+                history = self.copyright_store.actions_for_video(
+                    video_id, claim_fingerprint=parsed_claim.claim.fingerprint
+                )
+                decision = choose_action(
+                    parsed_claim.claim,
+                    history,
+                    self.config.youtube_copyright,
+                )
+                if decision.wait_for_processing:
+                    self.copyright_store.update_video_state(
+                        video_id,
+                        VideoState.PROCESSING,
+                        processing=True,
+                        next_check_at=next_check,
+                    )
+                    return False
+                if decision.action is None:
+                    state = (
+                        VideoState.MANUAL_REQUIRED
+                        if decision.manual_required
+                        else VideoState.AUTOMATION_UNAVAILABLE
+                    )
+                    self.copyright_store.update_video_state(
+                        video_id,
+                        state,
+                        last_error=decision.reason,
+                        next_check_at=next_check,
+                    )
+                    return False
+
+                trim_ranges: tuple[tuple[float, float], ...] = ()
+                if decision.action is RemediationAction.TRIM:
+                    if (
+                        video.duration_seconds is None
+                        or parsed_claim.claim.start_seconds is None
+                        or parsed_claim.claim.end_seconds is None
+                    ):
+                        raise ValueError(
+                            "Trim requires video duration and an unambiguous claim range"
+                        )
+                    trim_ranges = validate_trim_ranges(
+                        [
+                            (
+                                parsed_claim.claim.start_seconds,
+                                parsed_claim.claim.end_seconds,
+                            )
+                        ],
+                        duration_seconds=video.duration_seconds,
+                        max_trim_fraction=self.config.youtube_copyright.max_trim_fraction,
+                        min_remaining_seconds=(
+                            self.config.youtube_copyright.min_remaining_seconds
+                        ),
+                    )
+
+                action_record = self.copyright_store.add_action(
+                    CopyrightAction(
+                        id=None,
+                        run_id=run_id,
+                        video_id=video_id,
+                        claim_fingerprint=parsed_claim.claim.fingerprint,
+                        action=decision.action,
+                        state=ActionState.PLANNED,
+                        attempt=len(history) + 1,
+                        trace_path=str(session.trace_path) if session.trace_path else None,
+                        trim_ranges=trim_ranges,
+                    )
+                )
+                result = executor.execute(
+                    video_id,
+                    parsed_claim,
+                    decision.action,
+                    dry_run=self.config.youtube_copyright.mode == "dry_run",
+                    trace_path=session.trace_path,
+                )
+                if result.dry_run:
+                    self.copyright_store.update_action(
+                        action_record.id,
+                        ActionState.CANCELLED,
+                        error_message="Dry run: final confirmation was not clicked",
+                        before_screenshot=str(result.before_screenshot),
+                        confirmation_screenshot=str(result.confirmation_screenshot),
+                    )
+                    self.copyright_store.update_video_state(
+                        video_id,
+                        VideoState.ACTION_PENDING,
+                        next_check_at=next_check,
+                    )
+                    return False
+                self.copyright_store.update_action(
+                    action_record.id,
+                    ActionState.SUBMITTED,
+                    trace_path=str(result.trace_path) if result.trace_path else None,
+                    before_screenshot=str(result.before_screenshot),
+                    confirmation_screenshot=str(result.confirmation_screenshot),
+                    after_screenshot=str(result.after_screenshot),
+                )
+                self.copyright_store.update_video_state(
+                    video_id,
+                    VideoState.EDIT_SUBMITTED,
+                    processing=True,
+                    next_check_at=next_check,
+                )
+                return True
+        except StudioAuthRequired as exc:
+            self.copyright_store.update_video_state(
+                video_id,
+                VideoState.AUTH_REQUIRED,
+                last_error=str(exc),
+                next_check_at=next_check,
+            )
+            logger.error("YouTube Studio authentication required: %s", exc)
+            return False
+        except Exception as exc:
+            if action_record is not None and action_record.id is not None:
+                self.copyright_store.update_action(
+                    action_record.id, ActionState.FAILED, error_message=str(exc)
+                )
+            self.copyright_store.update_video_state(
+                video_id,
+                VideoState.FAILED,
+                last_error=str(exc),
+                next_check_at=next_check,
+            )
+            logger.exception("Copyright remediation failed for %s", video_id)
+            return False
+
+
+def _select_claim(claims: Iterable[Any]) -> Any:
+    claim_list = list(claims)
+    priority_words = (
+        "blocked worldwide",
+        "blocked in poland",
+        "blocked in germany",
+        "zablokowany na całym świecie",
+        "polska",
+        "niemcy",
+    )
+    for parsed in claim_list:
+        if any(word in parsed.raw_text.lower() for word in priority_words):
+            return parsed
+    return claim_list[0]
