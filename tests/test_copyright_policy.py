@@ -123,3 +123,21 @@ def test_parser_extracts_audio_visual_polish_and_strike_claims() -> None:
     assert parsed[1].claim.start_seconds == 3723
     assert parsed[1].claim.available_actions == (RemediationAction.TRIM,)
     assert len({item.claim.fingerprint for item in parsed}) == 3
+
+
+def test_claim_fingerprint_ignores_transient_status_text() -> None:
+    parser = StudioClaimParser()
+    first = parser.parse_rows(
+        "video",
+        [{"text": "Song title\nAudio\n00:10 - 00:20", "actions": "Erase song"}],
+    )[0]
+    later = parser.parse_rows(
+        "video",
+        [
+            {
+                "text": "Song title\nAudio\n00:10 - 00:20\nProcessing your edits",
+                "actions": "Mute all sound",
+            }
+        ],
+    )[0]
+    assert first.claim.fingerprint == later.claim.fingerprint

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -11,7 +12,12 @@ from youtube_copyright.browser_session import (
     StudioAuthRequired,
     StudioBrowserManager,
 )
-from youtube_copyright.diagnostics import DiagnosticRun, safe_component, safe_url
+from youtube_copyright.diagnostics import (
+    DiagnosticRun,
+    prune_diagnostics,
+    safe_component,
+    safe_url,
+)
 
 
 def _browser_config(tmp_path: Path, *, trace_mode: str = "always"):
@@ -87,3 +93,16 @@ def test_refuses_unattended_login_when_session_expired(tmp_path: Path) -> None:
         manager.open("run-2")
     context.close.assert_called_once()
     playwright.stop.assert_called_once()
+
+
+def test_pruning_removes_only_marked_guard_run_directories(tmp_path: Path) -> None:
+    config = _diagnostics(tmp_path)
+    marked = DiagnosticRun(config, "old-run").directory
+    unmarked = config.directory / "unrelated"
+    unmarked.mkdir()
+    os.utime(marked, (0, 0))
+    os.utime(unmarked, (0, 0))
+    removed = prune_diagnostics(config)
+    assert marked in removed
+    assert not marked.exists()
+    assert unmarked.exists()

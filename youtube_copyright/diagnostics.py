@@ -36,20 +36,31 @@ class DiagnosticRun:
         config: CopyrightDiagnosticsConfig,
         run_id: str,
         video_id: str | None = None,
+        *,
+        screenshots_enabled: bool = True,
     ) -> None:
         self.config = config
         self.run_id = safe_component(run_id)
         self.video_id = safe_component(video_id) if video_id else None
+        self.screenshots_enabled = screenshots_enabled
+        config.directory.mkdir(parents=True, exist_ok=True)
+        (config.directory / ".copyright_guard_diagnostics").touch(exist_ok=True)
         self.directory = config.directory / self.run_id
         if self.video_id:
             self.directory /= self.video_id
         self.directory.mkdir(parents=True, exist_ok=True)
+        run_directory = config.directory / self.run_id
+        (run_directory / ".copyright_guard_run").touch(exist_ok=True)
 
     def path(self, name: str, suffix: str) -> Path:
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S_%fZ")
         return self.directory / f"{timestamp}_{safe_component(name)}{suffix}"
 
-    def screenshot(self, page: Any, stage: str, *, full_page: bool = True) -> Path:
+    def screenshot(
+        self, page: Any, stage: str, *, full_page: bool = True
+    ) -> Path | None:
+        if not self.screenshots_enabled:
+            return None
         destination = self.path(stage, ".png")
         page.screenshot(path=str(destination), full_page=full_page)
         logger.info("Saved copyright screenshot: %s", destination)
@@ -82,10 +93,15 @@ def prune_diagnostics(config: CopyrightDiagnosticsConfig) -> list[Path]:
     root = config.directory
     if not root.is_dir():
         return []
+    if not (root / ".copyright_guard_diagnostics").is_file():
+        logger.warning("Refusing to prune unmarked diagnostics directory: %s", root)
+        return []
     cutoff = datetime.now(timezone.utc) - timedelta(days=config.retention_days)
     removed: list[Path] = []
     for child in root.iterdir():
         if not child.is_dir():
+            continue
+        if not (child / ".copyright_guard_run").is_file():
             continue
         modified = datetime.fromtimestamp(child.stat().st_mtime, timezone.utc)
         if modified < cutoff:

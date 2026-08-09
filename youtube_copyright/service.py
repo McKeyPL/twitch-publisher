@@ -392,8 +392,14 @@ class CopyrightGuardService:
                         action_record.id,
                         ActionState.CANCELLED,
                         error_message="Dry run: final confirmation was not clicked",
-                        before_screenshot=str(result.before_screenshot),
-                        confirmation_screenshot=str(result.confirmation_screenshot),
+                        before_screenshot=(
+                            str(result.before_screenshot) if result.before_screenshot else None
+                        ),
+                        confirmation_screenshot=(
+                            str(result.confirmation_screenshot)
+                            if result.confirmation_screenshot
+                            else None
+                        ),
                     )
                     self.copyright_store.update_video_state(
                         video_id,
@@ -405,9 +411,17 @@ class CopyrightGuardService:
                     action_record.id,
                     ActionState.SUBMITTED,
                     trace_path=str(result.trace_path) if result.trace_path else None,
-                    before_screenshot=str(result.before_screenshot),
-                    confirmation_screenshot=str(result.confirmation_screenshot),
-                    after_screenshot=str(result.after_screenshot),
+                    before_screenshot=(
+                        str(result.before_screenshot) if result.before_screenshot else None
+                    ),
+                    confirmation_screenshot=(
+                        str(result.confirmation_screenshot)
+                        if result.confirmation_screenshot
+                        else None
+                    ),
+                    after_screenshot=(
+                        str(result.after_screenshot) if result.after_screenshot else None
+                    ),
                 )
                 self.copyright_store.update_video_state(
                     video_id,

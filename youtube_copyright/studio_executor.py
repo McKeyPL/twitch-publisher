@@ -100,7 +100,7 @@ class StudioCopyrightExecutor:
                 "url": self.page.url.split("?", 1)[0],
                 "processing": processing,
                 "claims": [item.claim for item in claims],
-                "screenshot": str(before),
+                "screenshot": str(before) if before else None,
             },
         )
         return StudioInspection(video_id, processing, tuple(claims), self.page.url)
@@ -174,7 +174,7 @@ class StudioCopyrightExecutor:
     def _submit_confirmation(self, action: RemediationAction) -> None:
         # Studio occasionally presents Continue before the irreversible final
         # confirmation. Bound the sequence and never click an unrelated button.
-        continue_buttons = self._visible_locators("button", _ALIASES["continue"])
+        continue_buttons = self._visible_exact_locators("button", _ALIASES["continue"])
         if len(continue_buttons) > 1:
             raise StudioAmbiguousUi("More than one visible Continue button")
         if continue_buttons:
@@ -186,9 +186,9 @@ class StudioCopyrightExecutor:
             if action is RemediationAction.TRIM
             else _ALIASES["confirm_mute"]
         )
-        final_buttons = self._visible_locators("button", final_aliases)
+        final_buttons = self._visible_exact_locators("button", final_aliases)
         if not final_buttons:
-            final_buttons = self._visible_locators("button", _ALIASES["save"])
+            final_buttons = self._visible_exact_locators("button", _ALIASES["save"])
         if len(final_buttons) != 1:
             raise StudioAmbiguousUi(
                 f"Expected one final {action.value} confirmation, got {len(final_buttons)}"
@@ -216,15 +216,34 @@ class StudioCopyrightExecutor:
         return any(value in body for value in values)
 
     def _click_unique_any_role(self, aliases: Iterable[str]) -> None:
-        matches = []
         for role in ("menuitem", "option", "radio", "button"):
-            matches.extend(self._visible_locators(role, aliases))
-        unique = _unique_locators(matches)
-        if len(unique) != 1:
-            raise StudioAutomationUnavailable(
-                f"Expected one Studio action matching {tuple(aliases)}, got {len(unique)}"
-            )
-        unique[0].click()
+            unique = _unique_locators(self._visible_locators(role, aliases))
+            if len(unique) == 1:
+                unique[0].click()
+                return
+            if len(unique) > 1:
+                raise StudioAutomationUnavailable(
+                    f"More than one {role} matches Studio action {tuple(aliases)}"
+                )
+        raise StudioAutomationUnavailable(
+            f"No Studio action matches {tuple(aliases)}"
+        )
+
+    def _visible_exact_locators(self, role: str, aliases: Iterable[str]) -> list[Any]:
+        locator = self.page.get_by_role(
+            role,
+            name=re.compile(
+                "^(?:" + "|".join(re.escape(value) for value in aliases) + ")$",
+                re.IGNORECASE,
+            ),
+            exact=True,
+        )
+        result: list[Any] = []
+        for index in range(locator.count()):
+            candidate = locator.nth(index)
+            if candidate.is_visible():
+                result.append(candidate)
+        return result
 
     def _visible_locators(self, role: str, aliases: Iterable[str]) -> list[Any]:
         locator = self.page.get_by_role(role, name=_pattern(aliases), exact=False)

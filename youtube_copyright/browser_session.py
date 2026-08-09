@@ -92,7 +92,12 @@ class StudioBrowserManager:
             raise StudioBrowserError(
                 "Playwright is unavailable; install requirements and Chromium"
             )
-        diagnostic = DiagnosticRun(self.diagnostics_config, run_id, video_id)
+        diagnostic = DiagnosticRun(
+            self.diagnostics_config,
+            run_id,
+            video_id,
+            screenshots_enabled=self.browser_config.screenshots,
+        )
         playwright = sync_playwright().start()
         context = None
         trace_path: Path | None = None
@@ -117,6 +122,11 @@ class StudioBrowserManager:
             page = context.pages[0] if context.pages else context.new_page()
             self._attach_logging(page, run_id, video_id)
             page.goto(STUDIO_HOME, wait_until="domcontentloaded")
+            if "accounts.google.com" not in page.url:
+                try:
+                    page.locator("ytcp-app").wait_for(state="attached", timeout=15_000)
+                except Exception:
+                    logger.debug("Studio application shell did not attach within 15 seconds")
             if not self.is_authenticated(page):
                 if not interactive_login:
                     raise StudioAuthRequired(

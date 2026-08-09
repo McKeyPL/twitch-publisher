@@ -69,20 +69,28 @@ class StudioClaimParser:
                 for action, aliases in _ACTION_ALIASES.items()
                 if any(alias in combined for alias in aliases)
             )
+            content_title = _first_meaningful_line(text)
+            # Do not include transient status/action labels in the identity. They
+            # change after an edit and would otherwise reset erase->mute fallback.
             fingerprint = hashlib.sha256(
-                f"{video_id}\0{claim_type.value}\0{text}\0{start}\0{end}".encode("utf-8")
+                f"{video_id}\0{claim_type.value}\0{content_title}\0{start}\0{end}".encode(
+                    "utf-8"
+                )
             ).hexdigest()
             claim = CopyrightClaim(
                 fingerprint=fingerprint,
                 video_id=video_id,
                 claim_type=claim_type,
-                content_title=_first_meaningful_line(text),
+                content_title=content_title,
                 start_seconds=start,
                 end_seconds=end,
                 available_actions=actions,
                 actionable=claim_type is not ClaimType.STRIKE,
             )
-            results.append(ParsedStudioClaim(claim, index, text))
+            action_index = row.get("actionIndex", index)
+            if not isinstance(action_index, int) or action_index < 0:
+                action_index = index
+            results.append(ParsedStudioClaim(claim, action_index, text))
         return results
 
 
@@ -161,12 +169,26 @@ _CLAIM_EXTRACTION_SCRIPT = r"""
       button.closest('ytcp-video-copyright-claim-row, tr, [role="row"], .row') || button.parentElement
     ).filter(Boolean);
   }
-  return elements.map((element) => ({
+  const allActionButtons = Array.from(document.querySelectorAll('button')).filter((button) =>
+    visible(button) && /take action|select action|podejmij działanie|wybierz działanie/i.test(
+      button.innerText || button.getAttribute('aria-label') || ''
+    )
+  );
+  return elements.map((element, index) => ({
     text: (element.innerText || '').trim(),
     actions: Array.from(element.querySelectorAll('button, [role="menuitem"], [role="option"]'))
       .map((item) => (item.innerText || item.getAttribute('aria-label') || '').trim())
       .filter(Boolean)
-      .join('\n')
+      .join('\n'),
+    actionIndex: (() => {
+      const button = Array.from(element.querySelectorAll('button')).find((candidate) =>
+        /take action|select action|podejmij działanie|wybierz działanie/i.test(
+          candidate.innerText || candidate.getAttribute('aria-label') || ''
+        )
+      );
+      const actionIndex = button ? allActionButtons.indexOf(button) : index;
+      return actionIndex >= 0 ? actionIndex : index;
+    })()
   }));
 }
 """
