@@ -76,6 +76,7 @@ jobs:
         run: |
           bash -n install.sh
           bash -n start.sh
+          bash -n start-copyright-guard.sh
 
       - name: Build source archive and checksum
         shell: bash

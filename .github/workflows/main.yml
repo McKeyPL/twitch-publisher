@@ -44,6 +44,22 @@ jobs:
       - name: Compile Python sources
         run: python -m compileall -q .
 
+      - name: Validate PowerShell syntax
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $files = @('start.ps1', 'start-copyright-guard.ps1', 'normalize-recording-names.ps1')
+          foreach ($file in $files) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $file), [ref]$tokens, [ref]$errors
+            ) | Out-Null
+            if ($errors.Count) {
+              throw "$file syntax errors: $($errors.Message -join '; ')"
+            }
+          }
+
   linux-scripts:
     name: Validate Linux scripts
     runs-on: ubuntu-latest
@@ -56,12 +72,16 @@ jobs:
         run: |
           bash -n install.sh
           bash -n start.sh
+          bash -n start-copyright-guard.sh
 
       - name: Test installer help
         run: ./install.sh --help
 
       - name: Test launcher help
         run: ./start.sh --help
+
+      - name: Test copyright launcher help
+        run: ./start-copyright-guard.sh --help
 
       - name: Test installer without system changes
         run: ./install.sh --skip-system --skip-browsers --with-dev
