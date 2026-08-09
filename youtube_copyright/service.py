@@ -566,7 +566,24 @@ def _select_claim(claims: Iterable[Any]) -> Any:
         "polska",
         "niemcy",
     )
-    for parsed in claim_list:
-        if any(word in parsed.raw_text.lower() for word in priority_words):
-            return parsed
-    return claim_list[0]
+    specific = [
+        parsed
+        for parsed in claim_list
+        if any(word in parsed.raw_text.lower() for word in priority_words)
+    ]
+    if specific:
+        return specific[0]
+    generally_blocking = [
+        parsed
+        for parsed in claim_list
+        if any(word in parsed.raw_text.lower() for word in ("blocked", "zablokowan"))
+    ]
+    if generally_blocking:
+        return generally_blocking[0]
+    if len(claim_list) == 1:
+        # API already established that this video is blocked in a protected
+        # region, so a sole Content ID claim is the only possible source.
+        return claim_list[0]
+    raise RuntimeError(
+        "Studio shows multiple claims but none can be tied to the protected block"
+    )

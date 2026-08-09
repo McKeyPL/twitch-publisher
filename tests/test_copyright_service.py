@@ -7,7 +7,7 @@ from config import load_config
 from state import StateStore
 from youtube_copyright.models import VideoState
 from youtube_copyright.models import ActionState, RemediationAction
-from youtube_copyright.service import CopyrightGuardService
+from youtube_copyright.service import CopyrightGuardService, _select_claim
 from youtube_copyright.state import CopyrightStateStore
 from youtube_copyright.studio_executor import (
     StudioExecutionResult,
@@ -268,3 +268,26 @@ def test_trim_resolution_retimes_owned_captions_before_resolved(tmp_path: Path) 
         assert copyright_store.get_video("trim-video").state is VideoState.RESOLVED
         assert copyright_store.latest_action("trim-video").state is ActionState.SUCCEEDED
         assert copyright_store.get_caption_backup(action.id).status == "SERVING"
+
+
+def test_claim_selection_does_not_edit_ambiguous_monetization_claims() -> None:
+    claims = StudioClaimParser().parse_rows(
+        "video",
+        [
+            {"text": "Song A\nAudio\n00:10 - 00:20\nMonetized", "actions": "Erase song"},
+            {"text": "Song B\nAudio\n00:30 - 00:40\nMonetized", "actions": "Erase song"},
+        ],
+    )
+    import pytest
+
+    with pytest.raises(RuntimeError, match="multiple claims"):
+        _select_claim(claims)
+
+    blocked = StudioClaimParser().parse_rows(
+        "video",
+        [
+            {"text": "Song A\nAudio\nMonetized", "actions": "Erase song"},
+            {"text": "Song B\nAudio\nBlocked", "actions": "Erase song"},
+        ],
+    )
+    assert _select_claim(blocked).claim.content_title == "Song B"
