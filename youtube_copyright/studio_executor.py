@@ -17,7 +17,14 @@ logger = logging.getLogger(__name__)
 
 _ALIASES = {
     "see_details": ("see details", "review issues", "zobacz szczegóły", "sprawdź problemy"),
-    "take_action": ("take action", "select action", "podejmij działanie", "wybierz działanie"),
+    "take_action": (
+        "take action",
+        "select action",
+        "actions",
+        "podejmij działanie",
+        "wybierz działanie",
+        "działania",
+    ),
     "erase_song": ("erase song", "remove song", "usuń utwór", "wymaż utwór"),
     "mute_all": (
         "mute all sound in the claimed segment",
@@ -43,6 +50,19 @@ _SUBMITTED_MARKERS = _PROCESSING_MARKERS + (
     "changes are being processed",
     "zmiany są przetwarzane",
 )
+
+_CLAIM_UI_READY_SCRIPT = r"""
+() => {
+  const rows = document.querySelector(
+    'ytcr-video-content-list-row, ytcp-video-copyright-claim-row, ' +
+    'ytcp-video-copyright-claim-details, ytcp-copyright-claim-row, ' +
+    '[data-testid*="claim"], [class*="claim-row"]'
+  );
+  if (rows) return true;
+  const text = (document.body && document.body.innerText || '').toLowerCase();
+  return /video editing is in progress|processing your edits|trwa edytowanie filmu|przetwarzanie zmian/.test(text);
+}
+"""
 
 
 class StudioAutomationUnavailable(RuntimeError):
@@ -80,10 +100,30 @@ class StudioCopyrightExecutor:
 
     def inspect(self, video_id: str) -> StudioInspection:
         url = f"https://studio.youtube.com/video/{video_id}/copyright?hl=en"
-        self.page.goto(url, wait_until="domcontentloaded")
+        claim_data_error: Exception | None = None
+        claim_data_status: int | None = None
+        try:
+            with self.page.expect_response(
+                lambda response: "creator/list_creator_received_claims" in response.url,
+                timeout=30_000,
+            ) as response_info:
+                self.page.goto(url, wait_until="domcontentloaded")
+            claim_data_status = response_info.value.status
+            if claim_data_status >= 400:
+                claim_data_error = StudioAutomationUnavailable(
+                    f"Studio claims request returned HTTP {claim_data_status}"
+                )
+        except Exception as exc:
+            claim_data_error = exc
         self._validate_video_id(video_id)
-        self.page.wait_for_timeout(1000)
-        before = self.diagnostic.screenshot(self.page, "copyright_page")
+        # The response completes shortly before Polymer renders the claim rows.
+        self.page.wait_for_timeout(750)
+        try:
+            self.page.wait_for_function(_CLAIM_UI_READY_SCRIPT, timeout=10_000)
+        except Exception:
+            logger.debug(
+                "Studio claim UI did not expose a terminal element within 10 seconds"
+            )
         processing = self._body_contains(_PROCESSING_MARKERS)
         claims = self.parser.extract(self.page, video_id)
         if not claims and not processing:
@@ -93,6 +133,8 @@ class StudioCopyrightExecutor:
                 self.page.wait_for_timeout(500)
                 self._validate_video_id(video_id)
                 claims = self.parser.extract(self.page, video_id)
+        before = self.diagnostic.screenshot(self.page, "copyright_page")
+        body_excerpt = self.page.locator("body").inner_text(timeout=10_000)[:4000]
         self.diagnostic.write_json(
             "inspection",
             {
@@ -100,9 +142,17 @@ class StudioCopyrightExecutor:
                 "url": self.page.url.split("?", 1)[0],
                 "processing": processing,
                 "claims": [item.claim for item in claims],
+                "claim_data_status": claim_data_status,
+                "claim_data_error": str(claim_data_error) if claim_data_error else None,
+                "body_excerpt": body_excerpt,
                 "screenshot": str(before) if before else None,
             },
         )
+        if claim_data_error is not None and not claims and not processing:
+            raise StudioAutomationUnavailable(
+                "Studio did not finish loading Content ID claim data: "
+                f"{claim_data_error}"
+            ) from claim_data_error
         return StudioInspection(video_id, processing, tuple(claims), self.page.url)
 
     def execute(

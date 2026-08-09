@@ -283,6 +283,11 @@ class CopyrightGuardService:
                 claims = [item.claim for item in inspection.claims]
                 self.copyright_store.replace_claims(video_id, claims)
                 if not inspection.claims:
+                    logger.warning(
+                        "YouTube Studio exposed no parseable Content ID claims for %s; "
+                        "diagnostics were saved for the next selector update",
+                        video_id,
+                    )
                     self.copyright_store.update_video_state(
                         video_id,
                         VideoState.AUTOMATION_UNAVAILABLE,

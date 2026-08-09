@@ -10,9 +10,10 @@ from youtube_copyright.diagnostics import DiagnosticRun
 from youtube_copyright.models import RemediationAction
 from youtube_copyright.studio_executor import (
     StudioAmbiguousUi,
+    StudioAutomationUnavailable,
     StudioCopyrightExecutor,
 )
-from youtube_copyright.studio_parser import StudioClaimParser
+from youtube_copyright.studio_parser import StudioClaimParser, _CLAIM_EXTRACTION_SCRIPT
 
 
 class FakeElement:
@@ -50,6 +51,26 @@ class FakeMarker:
         return None
 
 
+class FakeResponse:
+    url = "https://studio.youtube.com/youtubei/v1/creator/list_creator_received_claims"
+    status = 200
+
+
+class FakeResponseInfo:
+    def __init__(self, page: "FakePage") -> None:
+        self.page = page
+        self.value = FakeResponse()
+
+    def __enter__(self) -> "FakeResponseInfo":
+        self.page.events.append("expect_response_enter")
+        return self
+
+    def __exit__(self, exc_type, exc, traceback) -> None:
+        self.page.events.append("expect_response_exit")
+        if self.page.response_error is not None:
+            raise self.page.response_error
+
+
 class FakeBody:
     def __init__(self, text: str) -> None:
         self.text = text
@@ -76,12 +97,26 @@ class FakePage:
         self.keyboard = FakeKeyboard()
         self.rows: list[dict[str, str]] = []
         self.body_text = ""
+        self.events: list[str] = []
+        self.response_error: Exception | None = None
+
+    def expect_response(self, predicate, **kwargs: object) -> FakeResponseInfo:
+        assert predicate(FakeResponse())
+        assert kwargs["timeout"] == 30_000
+        return FakeResponseInfo(self)
 
     def goto(self, url: str, **kwargs: object) -> None:
+        self.events.append("goto")
         self.url = url
 
     def wait_for_timeout(self, milliseconds: int) -> None:
+        self.events.append(f"wait:{milliseconds}")
         return None
+
+    def wait_for_function(self, script: str, **kwargs: object) -> None:
+        assert "ytcr-video-content-list-row" in script
+        assert kwargs["timeout"] == 10_000
+        self.events.append("wait_for_claim_ui")
 
     def screenshot(self, path: str, **kwargs: object) -> None:
         Path(path).write_bytes(b"png")
@@ -119,6 +154,26 @@ def test_inspection_extracts_claims_and_processing_state(tmp_path: Path) -> None
     assert inspection.processing
     assert len(inspection.claims) == 1
     assert inspection.claims[0].claim.start_seconds == 10
+    assert page.events[:4] == [
+        "expect_response_enter",
+        "goto",
+        "expect_response_exit",
+        "wait:750",
+    ]
+    assert "wait_for_claim_ui" in page.events
+
+
+def test_inspection_refuses_to_treat_unfinished_claim_request_as_empty(
+    tmp_path: Path,
+) -> None:
+    page = FakePage(tmp_path, {})
+    page.response_error = TimeoutError("claim request timed out")
+    with pytest.raises(StudioAutomationUnavailable, match="did not finish loading"):
+        StudioCopyrightExecutor(page, _diagnostic(tmp_path)).inspect("video123")
+
+
+def test_parser_supports_new_youtube_claim_row_component() -> None:
+    assert "ytcr-video-content-list-row" in _CLAIM_EXTRACTION_SCRIPT
 
 
 def test_dry_run_opens_audio_action_but_does_not_confirm(tmp_path: Path) -> None:
@@ -142,6 +197,27 @@ def test_dry_run_opens_audio_action_but_does_not_confirm(tmp_path: Path) -> None
     assert page.roles["button"][0].clicks == 1
     assert page.roles["menuitem"][0].clicks == 1
     assert page.keyboard.pressed == ["Escape"]
+
+
+def test_dry_run_accepts_polish_new_ui_actions_button(tmp_path: Path) -> None:
+    page = FakePage(
+        tmp_path,
+        {"button": ["Działania"], "menuitem": ["Usuń utwór"]},
+    )
+    parsed = StudioClaimParser().parse_rows(
+        "video123",
+        [{"text": "Utwór\nDźwięk\n00:10 - 00:20", "actions": ""}],
+    )[0]
+    result = StudioCopyrightExecutor(page, _diagnostic(tmp_path)).execute(
+        "video123",
+        parsed,
+        RemediationAction.ERASE_SONG,
+        dry_run=True,
+        trace_path=None,
+    )
+    assert result.dry_run
+    assert page.roles["button"][0].clicks == 1
+    assert page.roles["menuitem"][0].clicks == 1
 
 
 def test_automatic_trim_requires_and_clicks_one_confirmation(tmp_path: Path) -> None:

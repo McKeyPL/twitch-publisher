@@ -150,6 +150,7 @@ _CLAIM_EXTRACTION_SCRIPT = r"""
     return style.visibility !== 'hidden' && style.display !== 'none' && rect.height > 0;
   };
   const selectors = [
+    'ytcr-video-content-list-row',
     'ytcp-video-copyright-claim-row',
     'ytcp-video-copyright-claim-details',
     'ytcp-copyright-claim-row',
@@ -163,14 +164,19 @@ _CLAIM_EXTRACTION_SCRIPT = r"""
   }
   if (!elements.length) {
     const buttons = Array.from(document.querySelectorAll('button')).filter((button) =>
-      /take action|select action|podejmij działanie|wybierz działanie/i.test(button.innerText || '')
+      /take action|select action|actions|podejmij działanie|wybierz działanie|działania/i.test(
+        button.innerText || button.getAttribute('aria-label') || ''
+      )
     );
     elements = buttons.map((button) =>
-      button.closest('ytcp-video-copyright-claim-row, tr, [role="row"], .row') || button.parentElement
+      button.closest(
+        'ytcr-video-content-list-row, ytcp-video-copyright-claim-row, tr, [role="row"], .row'
+      ) || button.parentElement
     ).filter(Boolean);
   }
   const allActionButtons = Array.from(document.querySelectorAll('button')).filter((button) =>
-    visible(button) && /take action|select action|podejmij działanie|wybierz działanie/i.test(
+    visible(button) &&
+    /take action|select action|actions|podejmij działanie|wybierz działanie|działania/i.test(
       button.innerText || button.getAttribute('aria-label') || ''
     )
   );
@@ -182,7 +188,7 @@ _CLAIM_EXTRACTION_SCRIPT = r"""
       .join('\n'),
     actionIndex: (() => {
       const button = Array.from(element.querySelectorAll('button')).find((candidate) =>
-        /take action|select action|podejmij działanie|wybierz działanie/i.test(
+        /take action|select action|actions|podejmij działanie|wybierz działanie|działania/i.test(
           candidate.innerText || candidate.getAttribute('aria-label') || ''
         )
       );
