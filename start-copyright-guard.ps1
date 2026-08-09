@@ -46,8 +46,8 @@ while ($true) {
         Write-LauncherLog "copyright_guard.py exited successfully."
         exit 0
     }
-    if ($Once) {
-        Write-LauncherLog "copyright_guard.py exited with code $exitCode; Once mode will not restart."
+    if ($Once -or $Login) {
+        Write-LauncherLog "copyright_guard.py exited with code $exitCode; one-shot mode will not restart."
         exit $exitCode
     }
     $restartCount++

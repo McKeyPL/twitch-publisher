@@ -21,6 +21,7 @@ def valid_raw_config() -> dict:
         raw = yaml.safe_load(stream)
     raw["platforms"]["youtube"]["client_secrets_file"] = "auth/credentials.json"
     raw["browser"]["firefox_profile_path"] = ""
+    raw["youtube_copyright"]["browser"]["executable_path"] = ""
     raw["platforms"]["youtube"]["playlists"] = {"mrozopl": ""}
     raw["paths"]["recordings_root"] = r"E:\TwitchRecordings"
     return raw
@@ -93,6 +94,8 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(config.youtube_copyright.protected_regions, ("PL", "DE"))
         self.assertEqual(config.youtube_copyright.max_trim_fraction, 0.9)
         self.assertEqual(config.youtube_copyright.browser.trace_mode, "always")
+        self.assertEqual(config.youtube_copyright.browser.channel, "chrome")
+        self.assertIsNone(config.youtube_copyright.browser.executable_path)
 
     def test_loads_rumble_license_from_environment(self) -> None:
         with patch.dict(
@@ -233,6 +236,12 @@ class ConfigValidationTests(unittest.TestCase):
         raw = valid_raw_config()
         raw["youtube_copyright"]["max_trim_fraction"] = 1.01
         with self.assertRaisesRegex(ConfigError, "max_trim_fraction"):
+            config_from_dict(raw)
+
+    def test_rejects_invalid_copyright_browser_channel(self) -> None:
+        raw = valid_raw_config()
+        raw["youtube_copyright"]["browser"]["channel"] = "firefox"
+        with self.assertRaisesRegex(ConfigError, "browser.channel"):
             config_from_dict(raw)
 
 

@@ -71,7 +71,7 @@ while true; do
     exit_code=$?
     CHILD_PID=""
     if ((exit_code == 0)); then exit 0; fi
-    if $ONCE; then exit "$exit_code"; fi
+    if $ONCE || $LOGIN; then exit "$exit_code"; fi
     ((restart_count += 1))
     sleep "$RESTART_DELAY"
 done

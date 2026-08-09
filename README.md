@@ -317,7 +317,9 @@ same caption track, and waits for `serving` before marking the video resolved.
 
 ### Initial Studio login
 
-Close any previous guard process and create the dedicated Chromium profile:
+Google rejects account sign-in from browsers controlled by automation. Install a
+current stable Google Chrome (or select `msedge` in `config.yaml`), close any
+previous guard process, and create the dedicated Studio profile:
 
 ```powershell
 .\start-copyright-guard.ps1 -Login -BrowserDebug
@@ -329,10 +331,23 @@ Linux equivalent:
 ./start-copyright-guard.sh --login --browser-debug
 ```
 
-Complete Google login, MFA, or CAPTCHA in the opened window and press Enter. The
-profile is stored in `auth/youtube_studio_profile`; its storage-state backup is
-`auth/youtube_studio_state.json`. Both are ignored by Git. Never copy either file
-to an untrusted machine.
+`-Login` opens the installed browser directly, without Playwright or remote
+debugging. Complete Google login, MFA, or CAPTCHA and wait until YouTube Studio
+itself has loaded. Then close that browser window completely. The launcher
+automatically reopens the same dedicated profile through Playwright and verifies
+the session. Do not try to sign in in this second, automation-controlled window.
+
+The profile is stored in `auth/youtube_studio_profile`; its storage-state backup
+is `auth/youtube_studio_state.json`. Both are ignored by Git. Never copy either
+file to an untrusted machine. If the browser is installed in a non-standard
+location, set its absolute executable path in `.env`:
+
+```dotenv
+YOUTUBE_STUDIO_BROWSER_PATH=C:\Program Files\Google\Chrome\Application\chrome.exe
+```
+
+For Microsoft Edge use `channel: msedge` under `youtube_copyright.browser` and,
+only when auto-detection fails, point the variable to `msedge.exe`.
 
 ### Burn-in against known videos
 

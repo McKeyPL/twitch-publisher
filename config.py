@@ -139,6 +139,8 @@ class BrowserConfig:
 class CopyrightBrowserConfig:
     storage_state_file: Path
     user_data_directory: Path
+    channel: str
+    executable_path: Path | None
     headless: bool
     locale: str
     trace_mode: str
@@ -714,6 +716,18 @@ def config_from_dict(raw: Mapping[str, Any]) -> Config:
                         "youtube_copyright.browser",
                     ),
                     "youtube_copyright.browser.user_data_directory",
+                ),
+                channel=_choice(
+                    _required(
+                        copyright_browser, "channel", "youtube_copyright.browser"
+                    ),
+                    "youtube_copyright.browser.channel",
+                    {"chrome", "msedge"},
+                ),
+                executable_path=_path(
+                    copyright_browser.get("executable_path", ""),
+                    "youtube_copyright.browser.executable_path",
+                    allow_empty=True,
                 ),
                 headless=_boolean(
                     _required(copyright_browser, "headless", "youtube_copyright.browser"),

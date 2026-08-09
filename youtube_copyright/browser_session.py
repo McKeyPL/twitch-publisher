@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import logging
+import os
+import shutil
+import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -86,7 +90,6 @@ class StudioBrowserManager:
         run_id: str,
         *,
         video_id: str | None = None,
-        interactive_login: bool = False,
     ) -> StudioBrowserSession:
         if sync_playwright is None:
             raise StudioBrowserError(
@@ -104,11 +107,20 @@ class StudioBrowserManager:
         try:
             self.browser_config.user_data_directory.mkdir(parents=True, exist_ok=True)
             self.browser_config.storage_state_file.parent.mkdir(parents=True, exist_ok=True)
+            launch_options: dict[str, Any] = {
+                "headless": self.browser_config.headless,
+                "locale": self.browser_config.locale,
+                "viewport": {"width": 1440, "height": 1000},
+            }
+            if self.browser_config.executable_path is not None:
+                launch_options["executable_path"] = str(
+                    self.browser_config.executable_path
+                )
+            else:
+                launch_options["channel"] = self.browser_config.channel
             context = playwright.chromium.launch_persistent_context(
                 user_data_dir=str(self.browser_config.user_data_directory),
-                headless=self.browser_config.headless,
-                locale=self.browser_config.locale,
-                viewport={"width": 1440, "height": 1000},
+                **launch_options,
             )
             context.set_default_timeout(
                 self.browser_config.action_timeout_seconds * 1000
@@ -128,19 +140,9 @@ class StudioBrowserManager:
                 except Exception:
                     logger.debug("Studio application shell did not attach within 15 seconds")
             if not self.is_authenticated(page):
-                if not interactive_login:
-                    raise StudioAuthRequired(
-                        "YouTube Studio authentication is required; run copyright_guard.py --login"
-                    )
-                if self.browser_config.headless:
-                    raise StudioAuthRequired("Interactive Studio login requires headless=false")
-                print(
-                    "[youtube-studio] Sign in in the open browser, then press Enter"
+                raise StudioAuthRequired(
+                    "YouTube Studio authentication is required; run copyright_guard.py --login"
                 )
-                input()
-                page.goto(STUDIO_HOME, wait_until="domcontentloaded")
-                if not self.is_authenticated(page):
-                    raise StudioAuthRequired("YouTube Studio is still not authenticated")
             context.storage_state(path=str(self.browser_config.storage_state_file))
             return StudioBrowserSession(
                 page=page,
@@ -164,6 +166,111 @@ class StudioBrowserManager:
                     pass
             playwright.stop()
             raise
+
+    def login(self, run_id: str = "interactive-login") -> None:
+        """Create the Studio profile in a normal browser, then verify it.
+
+        Google explicitly blocks some sign-ins performed in browsers controlled by
+        automation. The login browser is therefore started directly, without
+        Playwright or a remote-debugging connection. Playwright only opens the same
+        dedicated profile after the user has closed the regular browser.
+        """
+
+        if self.browser_config.headless:
+            raise StudioAuthRequired("Interactive Studio login requires headless=false")
+        executable = self._resolve_browser_executable()
+        profile = self.browser_config.user_data_directory.resolve()
+        profile.mkdir(parents=True, exist_ok=True)
+        command = [
+            str(executable),
+            f"--user-data-dir={profile}",
+            "--profile-directory=Default",
+            "--no-first-run",
+            "--no-default-browser-check",
+            "--disable-background-mode",
+            "--new-window",
+            STUDIO_HOME,
+        ]
+        logger.info(
+            "Opening a regular %s browser for manual YouTube Studio login: %s",
+            self.browser_config.channel,
+            executable,
+        )
+        print(
+            "[youtube-studio] Sign in to YouTube Studio in the regular browser.\n"
+            "[youtube-studio] When Studio has loaded, CLOSE THAT BROWSER WINDOW "
+            "completely. Verification will then start automatically."
+        )
+        try:
+            completed = subprocess.run(command, check=False)
+        except OSError as exc:
+            raise StudioBrowserError(
+                f"Could not start the configured login browser: {executable}: {exc}"
+            ) from exc
+        if completed.returncode != 0:
+            raise StudioBrowserError(
+                f"The manual login browser exited with code {completed.returncode}"
+            )
+
+        try:
+            with self.open(f"{run_id}-verification"):
+                logger.info("The manually created YouTube Studio session is valid")
+        except StudioAuthRequired as exc:
+            raise StudioAuthRequired(
+                "The regular browser closed, but the dedicated profile is not signed "
+                "in to YouTube Studio. Run --login again and wait until Studio itself "
+                "has loaded before closing the window."
+            ) from exc
+
+    def _resolve_browser_executable(self) -> Path:
+        configured = self.browser_config.executable_path
+        if configured is not None:
+            candidate = configured.expanduser().resolve()
+            if candidate.is_file():
+                return candidate
+            raise StudioBrowserError(
+                "youtube_copyright.browser.executable_path does not point to a file: "
+                f"{candidate}"
+            )
+
+        channel = self.browser_config.channel
+        names = (
+            ("chrome.exe", "chrome", "google-chrome", "google-chrome-stable")
+            if channel == "chrome"
+            else ("msedge.exe", "msedge", "microsoft-edge", "microsoft-edge-stable")
+        )
+        candidates: list[Path] = []
+        for name in names:
+            found = shutil.which(name)
+            if found:
+                candidates.append(Path(found))
+        if sys.platform == "win32":
+            roots = [
+                os.environ.get("PROGRAMFILES"),
+                os.environ.get("PROGRAMFILES(X86)"),
+                os.environ.get("LOCALAPPDATA"),
+            ]
+            relative = (
+                Path("Google/Chrome/Application/chrome.exe")
+                if channel == "chrome"
+                else Path("Microsoft/Edge/Application/msedge.exe")
+            )
+            candidates.extend(Path(root) / relative for root in roots if root)
+        elif sys.platform == "darwin":
+            candidates.append(
+                Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
+                if channel == "chrome"
+                else Path(
+                    "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"
+                )
+            )
+        for candidate in candidates:
+            if candidate.is_file():
+                return candidate.resolve()
+        raise StudioBrowserError(
+            f"Could not find installed {channel}. Install it or set "
+            "YOUTUBE_STUDIO_BROWSER_PATH to its executable."
+        )
 
     @staticmethod
     def is_authenticated(page: Any) -> bool:

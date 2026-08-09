@@ -40,11 +40,16 @@ been restored. Blocking in any other remaining country does not prevent RESOLVED
 ## Browser and diagnostics
 
 YouTube Studio uses a dedicated browser profile and storage state under `auth/`.
-The first login and later MFA or CAPTCHA challenges require a human. The initial
-burn-in runs headful and stores traces, screenshots, browser console messages,
-failed requests, parsed claim data, decisions, and confirmation evidence under
-`logs/youtube_copyright`. These files can contain session data and must never be
-committed or shared without review.
+Google may reject sign-in when a browser is controlled by automation. Therefore
+`--login` starts a regular installed Chrome or Edge process without Playwright or
+remote debugging. The user completes login/MFA, waits for Studio, and closes that
+browser. Only then does the guard launch Playwright with the same dedicated profile
+and verify authentication. Normal remediation never types Google credentials.
+
+The initial burn-in runs headful and stores traces, screenshots, browser console
+messages, failed requests, parsed claim data, decisions, and confirmation evidence
+under `logs/youtube_copyright`. These files can contain session data and must never
+be committed or shared without review.
 
 ## Captions
 

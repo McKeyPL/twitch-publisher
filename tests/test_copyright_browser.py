@@ -24,6 +24,8 @@ def _browser_config(tmp_path: Path, *, trace_mode: str = "always"):
     return CopyrightBrowserConfig(
         storage_state_file=tmp_path / "auth" / "state.json",
         user_data_directory=tmp_path / "auth" / "profile",
+        channel="chrome",
+        executable_path=None,
         headless=False,
         locale="en-US",
         trace_mode=trace_mode,
@@ -77,10 +79,40 @@ def test_opens_authenticated_persistent_session_and_saves_trace(tmp_path: Path) 
         session.close(success=True)
 
     playwright.chromium.launch_persistent_context.assert_called_once()
+    assert (
+        playwright.chromium.launch_persistent_context.call_args.kwargs["channel"]
+        == "chrome"
+    )
     context.storage_state.assert_called()
     context.tracing.stop.assert_called_once_with(path=str(trace_path))
     page.goto.assert_called_once()
     playwright.stop.assert_called_once()
+
+
+def test_manual_login_uses_regular_browser_then_verifies_profile(
+    tmp_path: Path,
+) -> None:
+    manager = StudioBrowserManager(_browser_config(tmp_path), _diagnostics(tmp_path))
+    executable = tmp_path / "chrome.exe"
+    executable.touch()
+    verified_session = MagicMock()
+
+    with (
+        patch.object(manager, "_resolve_browser_executable", return_value=executable),
+        patch("youtube_copyright.browser_session.subprocess.run") as run_browser,
+        patch.object(manager, "open", return_value=verified_session) as open_session,
+    ):
+        run_browser.return_value = SimpleNamespace(returncode=0)
+        manager.login()
+
+    command = run_browser.call_args.args[0]
+    assert command[0] == str(executable)
+    assert any(argument.startswith("--user-data-dir=") for argument in command)
+    assert "--remote-debugging-port" not in " ".join(command)
+    assert command[-1] == "https://studio.youtube.com/"
+    open_session.assert_called_once_with("interactive-login-verification")
+    verified_session.__enter__.assert_called_once()
+    verified_session.__exit__.assert_called_once()
 
 
 def test_refuses_unattended_login_when_session_expired(tmp_path: Path) -> None:

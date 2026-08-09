@@ -15,7 +15,11 @@ from config import Config, load_config
 from state import StateStore
 from youtube_copyright.service import CopyrightGuardService
 from youtube_copyright.state import CopyrightStateStore
-from youtube_copyright.browser_session import StudioBrowserManager
+from youtube_copyright.browser_session import (
+    StudioAuthRequired,
+    StudioBrowserError,
+    StudioBrowserManager,
+)
 from youtube_copyright.diagnostics import prune_diagnostics
 from youtube_copyright.process_lock import GuardAlreadyRunning, SingleInstanceLock
 
@@ -155,9 +159,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             config.youtube_copyright.diagnostics,
         )
         lock_path = config.paths.database.parent / "youtube_copyright_guard.lock"
-        with SingleInstanceLock(lock_path):
-            with manager.open("interactive-login", interactive_login=True):
+        try:
+            with SingleInstanceLock(lock_path):
+                manager.login("interactive-login")
                 logger.info("YouTube Studio session was saved successfully")
+        except (GuardAlreadyRunning, StudioAuthRequired, StudioBrowserError) as exc:
+            logger.error("YouTube Studio login failed: %s", exc)
+            return 2
         return 0
     lock_path = config.paths.database.parent / "youtube_copyright_guard.lock"
     try:

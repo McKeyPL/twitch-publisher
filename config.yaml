@@ -111,6 +111,10 @@ youtube_copyright:
   browser:
     storage_state_file: auth/youtube_studio_state.json
     user_data_directory: auth/youtube_studio_profile
+    # Google blocks account sign-in inside automation-controlled browsers.
+    # -Login therefore opens a regular installed Chrome with this dedicated profile.
+    channel: chrome # chrome | msedge
+    executable_path: ${YOUTUBE_STUDIO_BROWSER_PATH:-}
     headless: false
     locale: en-US
     # Keep successful traces during the initial burn-in; switch to on_error later.
