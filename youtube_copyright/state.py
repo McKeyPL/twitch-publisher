@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from types import TracebackType
 from typing import Iterable
+from urllib.parse import parse_qs, urlparse
 
 from .models import (
     ActionState,
@@ -20,6 +22,9 @@ from .models import (
     RestrictionKind,
     VideoState,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 _SCHEMA = """
@@ -148,6 +153,45 @@ def _video_id(value: str) -> str:
     if not result or len(result) > 32 or any(char.isspace() for char in result):
         raise ValueError(f"Invalid YouTube video ID: {value!r}")
     return result
+
+
+def _publisher_video_ids(value: str) -> tuple[str, ...]:
+    """Expand one publisher ID, URL, or multipart parent JSON payload."""
+
+    raw = value.strip()
+    candidates: list[str] = []
+    if raw.startswith("["):
+        payload = json.loads(raw)
+        if not isinstance(payload, list):
+            raise ValueError("Multipart YouTube identifier must be a JSON list")
+        for item in payload:
+            if not isinstance(item, dict):
+                raise ValueError("Multipart YouTube identifier contains a non-object")
+            candidate = item.get("id_or_url")
+            if candidate is not None:
+                candidates.append(str(candidate))
+    else:
+        candidates.append(raw)
+
+    result: list[str] = []
+    for candidate in candidates:
+        normalized = candidate.strip()
+        if "://" in normalized:
+            parsed = urlparse(normalized)
+            host = (parsed.hostname or "").casefold()
+            if host in {"youtu.be", "www.youtu.be"}:
+                normalized = parsed.path.strip("/").split("/", 1)[0]
+            elif host in {"youtube.com", "www.youtube.com", "m.youtube.com"}:
+                query_id = parse_qs(parsed.query).get("v", [""])[0]
+                path_parts = [part for part in parsed.path.split("/") if part]
+                normalized = query_id or (
+                    path_parts[1]
+                    if len(path_parts) >= 2
+                    and path_parts[0] in {"embed", "live", "shorts"}
+                    else ""
+                )
+        result.append(_video_id(normalized))
+    return tuple(result)
 
 
 class CopyrightStateStore:
@@ -347,8 +391,7 @@ class CopyrightStateStore:
                   AND platform_video_id IS NOT NULL
                 """
             ).fetchall()
-            for row in rows:
-                result[_video_id(row["platform_video_id"])] = row["video_path"]
+            self._merge_publisher_rows(result, rows, "upload_status")
         if "upload_part_status" in tables:
             rows = connection.execute(
                 """
@@ -357,9 +400,30 @@ class CopyrightStateStore:
                   AND platform_video_id IS NOT NULL
                 """
             ).fetchall()
-            for row in rows:
-                result[_video_id(row["platform_video_id"])] = row["video_path"]
+            self._merge_publisher_rows(result, rows, "upload_part_status")
         return result
+
+    @staticmethod
+    def _merge_publisher_rows(
+        result: dict[str, str | None],
+        rows: Iterable[sqlite3.Row],
+        table_name: str,
+    ) -> None:
+        for row in rows:
+            raw_identifier = row["platform_video_id"]
+            try:
+                video_ids = _publisher_video_ids(raw_identifier)
+            except (TypeError, ValueError, json.JSONDecodeError) as exc:
+                logger.warning(
+                    "Ignoring invalid YouTube identifier from %s for %s: %r (%s)",
+                    table_name,
+                    row["video_path"],
+                    raw_identifier,
+                    exc,
+                )
+                continue
+            for video_id in video_ids:
+                result[video_id] = row["video_path"]
 
     def replace_claims(
         self, video_id: str, claims: Iterable[CopyrightClaim]

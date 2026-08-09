@@ -122,6 +122,18 @@ def test_reads_successful_publisher_video_ids(tmp_path: Path) -> None:
             (r"E:\recordings\two.mkv", "video-two"),
         )
         connection.execute(
+            "INSERT INTO upload_status VALUES (?, 'youtube', 'SUCCESS', ?)",
+            (
+                r"E:\recordings\multipart.mkv",
+                '[{"part":1,"id_or_url":"yi5ajmYIm6U"},'
+                '{"part":2,"id_or_url":"https://youtu.be/3zf-FsrsKN8"}]',
+            ),
+        )
+        connection.execute(
+            "INSERT INTO upload_status VALUES (?, 'youtube', 'SUCCESS', ?)",
+            (r"E:\recordings\invalid.mkv", "[invalid-json"),
+        )
+        connection.execute(
             "INSERT INTO upload_status VALUES (?, 'cda', 'SUCCESS', ?)",
             (r"E:\recordings\ignored.mkv", "cda-id"),
         )
@@ -130,6 +142,8 @@ def test_reads_successful_publisher_video_ids(tmp_path: Path) -> None:
         assert store.publisher_video_ids() == {
             "video-one": r"E:\recordings\one.mkv",
             "video-two": r"E:\recordings\two.mkv",
+            "yi5ajmYIm6U": r"E:\recordings\multipart.mkv",
+            "3zf-FsrsKN8": r"E:\recordings\multipart.mkv",
         }
 
 
