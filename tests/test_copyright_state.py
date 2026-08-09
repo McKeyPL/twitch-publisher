@@ -137,3 +137,35 @@ def test_wal_is_enabled(tmp_path: Path) -> None:
     with CopyrightStateStore(tmp_path / "state.sqlite3") as store:
         mode = store._require_connection().execute("PRAGMA journal_mode").fetchone()[0]
     assert mode.lower() == "wal"
+
+
+def test_caption_backup_audit_record(tmp_path: Path) -> None:
+    with CopyrightStateStore(tmp_path / "state.sqlite3") as store:
+        store.start_run("run-caption", "automatic")
+        store.upsert_video(CopyrightVideo(video_id="caption-video"))
+        action = store.add_action(
+            CopyrightAction(
+                None,
+                "run-caption",
+                "caption-video",
+                RemediationAction.TRIM,
+                ActionState.PLANNED,
+                trim_ranges=((10, 20),),
+            )
+        )
+        original = tmp_path / "original.srt"
+        record = store.save_caption_backup(
+            action_id=action.id,
+            video_id="caption-video",
+            track_id="track",
+            language="pl",
+            name="Twitch Chat",
+            original_path=original,
+            original_duration_seconds=100,
+            status="PENDING",
+        )
+        assert record.original_path == original
+        updated = store.update_caption_backup(
+            action.id, status="SERVING", adjusted_path=tmp_path / "adjusted.srt"
+        )
+        assert updated.status == "SERVING"

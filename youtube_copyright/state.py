@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from types import TracebackType
@@ -95,7 +96,36 @@ CREATE INDEX IF NOT EXISTS idx_youtube_copyright_action_video
     ON youtube_copyright_action(video_id, id);
 CREATE INDEX IF NOT EXISTS idx_youtube_copyright_action_state
     ON youtube_copyright_action(state);
+
+CREATE TABLE IF NOT EXISTS youtube_copyright_caption_backup (
+    action_id INTEGER PRIMARY KEY REFERENCES youtube_copyright_action(id) ON DELETE CASCADE,
+    video_id TEXT NOT NULL REFERENCES youtube_copyright_video(video_id),
+    track_id TEXT,
+    language TEXT,
+    name TEXT,
+    original_path TEXT,
+    adjusted_path TEXT,
+    original_duration_seconds REAL,
+    status TEXT NOT NULL,
+    error_message TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 """
+
+
+@dataclass(frozen=True, slots=True)
+class CaptionBackupRecord:
+    action_id: int
+    video_id: str
+    track_id: str | None
+    language: str | None
+    name: str | None
+    original_path: Path | None
+    adjusted_path: Path | None
+    original_duration_seconds: float | None
+    status: str
+    error_message: str | None
 
 
 def _now() -> datetime:
@@ -514,6 +544,106 @@ class CopyrightStateStore:
         sql += " ORDER BY id"
         rows = self._require_connection().execute(sql, parameters).fetchall()
         return [self._action_from_row(row) for row in rows]
+
+    def save_caption_backup(
+        self,
+        *,
+        action_id: int,
+        video_id: str,
+        track_id: str | None,
+        language: str | None,
+        name: str | None,
+        original_path: Path | None,
+        original_duration_seconds: float | None,
+        status: str,
+        error_message: str | None = None,
+    ) -> CaptionBackupRecord:
+        now = _serialize(_now())
+        with self._require_connection():
+            self._require_connection().execute(
+                """
+                INSERT INTO youtube_copyright_caption_backup(
+                    action_id, video_id, track_id, language, name, original_path,
+                    adjusted_path, original_duration_seconds, status, error_message,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)
+                ON CONFLICT(action_id) DO UPDATE SET
+                    track_id = excluded.track_id,
+                    language = excluded.language,
+                    name = excluded.name,
+                    original_path = excluded.original_path,
+                    original_duration_seconds = excluded.original_duration_seconds,
+                    status = excluded.status,
+                    error_message = excluded.error_message,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    action_id,
+                    _video_id(video_id),
+                    track_id,
+                    language,
+                    name,
+                    str(original_path) if original_path else None,
+                    original_duration_seconds,
+                    status,
+                    error_message,
+                    now,
+                    now,
+                ),
+            )
+        result = self.get_caption_backup(action_id)
+        assert result is not None
+        return result
+
+    def update_caption_backup(
+        self,
+        action_id: int,
+        *,
+        status: str,
+        adjusted_path: Path | None = None,
+        error_message: str | None = None,
+    ) -> CaptionBackupRecord:
+        with self._require_connection():
+            cursor = self._require_connection().execute(
+                """
+                UPDATE youtube_copyright_caption_backup SET
+                    status = ?, adjusted_path = COALESCE(?, adjusted_path),
+                    error_message = ?, updated_at = ?
+                WHERE action_id = ?
+                """,
+                (
+                    status,
+                    str(adjusted_path) if adjusted_path else None,
+                    error_message,
+                    _serialize(_now()),
+                    action_id,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise KeyError(f"Unknown caption backup for action {action_id}")
+        result = self.get_caption_backup(action_id)
+        assert result is not None
+        return result
+
+    def get_caption_backup(self, action_id: int) -> CaptionBackupRecord | None:
+        row = self._require_connection().execute(
+            "SELECT * FROM youtube_copyright_caption_backup WHERE action_id = ?",
+            (action_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return CaptionBackupRecord(
+            action_id=row["action_id"],
+            video_id=row["video_id"],
+            track_id=row["track_id"],
+            language=row["language"],
+            name=row["name"],
+            original_path=Path(row["original_path"]) if row["original_path"] else None,
+            adjusted_path=Path(row["adjusted_path"]) if row["adjusted_path"] else None,
+            original_duration_seconds=row["original_duration_seconds"],
+            status=row["status"],
+            error_message=row["error_message"],
+        )
 
     @staticmethod
     def _video_from_row(row: sqlite3.Row) -> CopyrightVideo:

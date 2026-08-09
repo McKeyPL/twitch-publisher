@@ -175,3 +175,96 @@ def test_automatic_cycle_submits_one_studio_action(tmp_path: Path) -> None:
         assert action.state is ActionState.SUBMITTED
 
     executor.execute.assert_called_once()
+
+
+def test_trim_resolution_retimes_owned_captions_before_resolved(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    from dataclasses import replace
+
+    config = replace(
+        config,
+        youtube_copyright=replace(config.youtube_copyright, mode="automatic"),
+    )
+    service_api = _service_for(
+        [_resource("trim-video", {"blocked": ["DE"]})]
+    )
+    service_api.captions.return_value.list.return_value.execute.return_value = {
+        "items": [
+            {
+                "id": "chat",
+                "snippet": {
+                    "videoId": "trim-video",
+                    "language": "pl",
+                    "name": "Twitch Chat",
+                    "trackKind": "standard",
+                    "status": "serving",
+                },
+            }
+        ]
+    }
+    srt = b"1\n00:00:30,000 --> 00:00:31,000\nchat\n"
+    service_api.captions.return_value.download.return_value.execute.return_value = srt
+    service_api.captions.return_value.update.return_value.execute.return_value = {
+        "id": "chat",
+        "snippet": {"status": "serving"},
+    }
+    parsed = StudioClaimParser().parse_rows(
+        "trim-video",
+        [
+            {
+                "text": "Visual video segment\n00:10 - 00:20\nBlocked in Germany",
+                "actions": "Trim out segment",
+            }
+        ],
+    )[0]
+    browser_session = MagicMock(
+        page=MagicMock(), diagnostic=MagicMock(), trace_path=tmp_path / "trace.zip"
+    )
+    browser_context = MagicMock()
+    browser_context.__enter__.return_value = browser_session
+    manager = MagicMock()
+    manager.open.return_value = browser_context
+    executor = MagicMock()
+    executor.inspect.return_value = StudioInspection(
+        "trim-video", False, (parsed,), "https://studio.youtube.com/video/trim-video/copyright"
+    )
+    executor.execute.return_value = StudioExecutionResult(
+        True,
+        False,
+        RemediationAction.TRIM,
+        tmp_path / "trace.zip",
+        tmp_path / "before.png",
+        tmp_path / "confirm.png",
+        tmp_path / "after.png",
+    )
+
+    with (
+        StateStore(config.paths.database) as quota_store,
+        CopyrightStateStore(config.paths.database) as copyright_store,
+        patch("youtube_copyright.service.StudioBrowserManager", return_value=manager),
+        patch("youtube_copyright.service.StudioCopyrightExecutor", return_value=executor),
+        patch("youtube_copyright.captions.MediaFileUpload"),
+    ):
+        guard = CopyrightGuardService(
+            config, copyright_store, quota_store, api_service=service_api
+        )
+        first = guard.run_cycle(
+            video_ids=["trim-video"], include_channel_uploads=False
+        )
+        assert first.actions_submitted == 1
+        action = copyright_store.latest_action("trim-video")
+        assert action is not None
+        assert copyright_store.get_caption_backup(action.id).status == "PENDING"
+
+        resolved = _resource("trim-video", None)
+        resolved["contentDetails"]["duration"] = "PT1H59M50S"
+        service_api.videos.return_value.list.return_value.execute.return_value = {
+            "items": [resolved]
+        }
+        second = guard.run_cycle(
+            video_ids=["trim-video"], include_channel_uploads=False
+        )
+        assert second.actionable_video_ids == ()
+        assert copyright_store.get_video("trim-video").state is VideoState.RESOLVED
+        assert copyright_store.latest_action("trim-video").state is ActionState.SUCCEEDED
+        assert copyright_store.get_caption_backup(action.id).status == "SERVING"

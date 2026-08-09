@@ -16,6 +16,7 @@ from youtube_api import YouTubeApiClient
 
 from .api_client import YouTubeCopyrightApi
 from .browser_session import StudioAuthRequired, StudioBrowserManager
+from .captions import CaptionBackup, CaptionTrack, CopyrightCaptionManager
 from .detector import classify_region_restriction
 from .models import (
     ActionState,
@@ -145,10 +146,11 @@ class CopyrightGuardService:
                     and latest_action is not None
                     and latest_action.state in {ActionState.SUBMITTED, ActionState.PROCESSING}
                 ):
-                    self.copyright_store.update_action(
-                        latest_action.id, ActionState.SUCCEEDED
+                    state = (
+                        VideoState.RESOLVED
+                        if self._finalize_resolved_action(resource, latest_action)
+                        else VideoState.CAPTIONS_PENDING
                     )
-                    state = VideoState.RESOLVED
                 if resource.rejection_reason in {"claim", "copyright"}:
                     state = VideoState.MANUAL_REQUIRED
                 self.copyright_store.upsert_video(
@@ -332,6 +334,27 @@ class CopyrightGuardService:
                         trim_ranges=trim_ranges,
                     )
                 )
+                if decision.action is RemediationAction.TRIM:
+                    caption_manager = CopyrightCaptionManager(
+                        self.api.service,
+                        self.config.platforms.youtube,
+                        self.config.youtube_copyright.diagnostics.directory
+                        / "caption_backups",
+                        self._reserve_quota,
+                    )
+                    backup = caption_manager.backup_owned_track(
+                        video_id, action_record.id
+                    )
+                    self.copyright_store.save_caption_backup(
+                        action_id=action_record.id,
+                        video_id=video_id,
+                        track_id=backup.track.id if backup.track else None,
+                        language=backup.track.language if backup.track else None,
+                        name=backup.track.name if backup.track else None,
+                        original_path=backup.original_path,
+                        original_duration_seconds=video.duration_seconds,
+                        status=backup.status,
+                    )
                 result = executor.execute(
                     video_id,
                     parsed_claim,
@@ -390,6 +413,91 @@ class CopyrightGuardService:
             )
             logger.exception("Copyright remediation failed for %s", video_id)
             return False
+
+    def _finalize_resolved_action(self, resource: Any, action: CopyrightAction) -> bool:
+        if action.id is None:
+            return False
+        if action.action is not RemediationAction.TRIM:
+            self.copyright_store.update_action(action.id, ActionState.SUCCEEDED)
+            return True
+        record = self.copyright_store.get_caption_backup(action.id)
+        if record is None:
+            self.copyright_store.update_action(
+                action.id,
+                ActionState.FAILED,
+                error_message="Trim completed without a caption backup audit record",
+            )
+            return False
+        if record.status == "NOT_PRESENT":
+            self.copyright_store.update_action(action.id, ActionState.SUCCEEDED)
+            return True
+        if record.track_id is None or record.original_path is None:
+            self.copyright_store.update_caption_backup(
+                action.id,
+                status="FAILED",
+                error_message="Caption backup metadata is incomplete",
+            )
+            return False
+
+        manager = CopyrightCaptionManager(
+            self.api.service,
+            self.config.platforms.youtube,
+            self.config.youtube_copyright.diagnostics.directory / "caption_backups",
+            self._reserve_quota,
+        )
+        if record.status in {"SYNCING", "SERVING"}:
+            current_status = manager.get_track_status(resource.video_id, record.track_id)
+            if current_status == "SERVING":
+                self.copyright_store.update_caption_backup(action.id, status="SERVING")
+                self.copyright_store.update_action(action.id, ActionState.SUCCEEDED)
+                return True
+            if current_status == "FAILED" or current_status is None:
+                self.copyright_store.update_caption_backup(
+                    action.id,
+                    status="FAILED",
+                    error_message="Updated caption track failed or disappeared",
+                )
+            return False
+
+        original_duration = record.original_duration_seconds
+        if original_duration is None or resource.duration_seconds is None:
+            raise RuntimeError("Cannot verify the post-trim video duration")
+        removed = sum(end - start for start, end in action.trim_ranges)
+        expected_duration = original_duration - removed
+        if abs(resource.duration_seconds - expected_duration) > 2.0:
+            raise RuntimeError(
+                "Post-trim duration does not match recorded trim ranges: "
+                f"expected {expected_duration:.3f}s, got {resource.duration_seconds:.3f}s"
+            )
+        track = CaptionTrack(
+            id=record.track_id,
+            video_id=record.video_id,
+            language=record.language or self.config.platforms.youtube.captions_language,
+            name=record.name or self.config.platforms.youtube.captions_name,
+            track_kind="unknown",
+            status=record.status,
+        )
+        updated = manager.update_after_trim(
+            CaptionBackup(
+                video_id=record.video_id,
+                action_id=record.action_id,
+                track=track,
+                original_path=record.original_path,
+                adjusted_path=record.adjusted_path,
+                status=record.status,
+                error_message=record.error_message,
+            ),
+            action.trim_ranges,
+        )
+        self.copyright_store.update_caption_backup(
+            action.id,
+            status=updated.status,
+            adjusted_path=updated.adjusted_path,
+        )
+        if updated.status == "SERVING":
+            self.copyright_store.update_action(action.id, ActionState.SUCCEEDED)
+            return True
+        return False
 
 
 def _select_claim(claims: Iterable[Any]) -> Any:
