@@ -69,8 +69,10 @@ def test_service_is_built_lazily_with_mocked_discovery_build(
     with StateStore(tmp_path / "state.sqlite3") as store:
         uploader = YouTubeUploader(youtube_config, retry_config, store)
         with (
-            patch.object(uploader, "_get_credentials", return_value=MagicMock()) as credentials,
-            patch("uploaders.youtube.build", return_value=service) as mocked_build,
+            patch.object(
+                uploader.api_client, "get_credentials", return_value=MagicMock()
+            ) as credentials,
+            patch("youtube_api.build", return_value=service) as mocked_build,
         ):
             assert uploader._get_service() is service
             assert uploader._get_service() is service
@@ -107,11 +109,11 @@ def test_uses_valid_cached_oauth_token_without_interactive_flow(
         uploader = YouTubeUploader(youtube_config, retry_config, store)
         with (
             patch(
-                "uploaders.youtube.Credentials.from_authorized_user_file",
+                "youtube_api.Credentials.from_authorized_user_file",
                 return_value=credentials,
             ) as load_token,
             patch(
-                "uploaders.youtube.InstalledAppFlow.from_client_secrets_file"
+                "youtube_api.InstalledAppFlow.from_client_secrets_file"
             ) as flow,
         ):
             assert uploader._get_credentials() is credentials
@@ -150,12 +152,12 @@ def test_refreshes_expired_token_and_persists_it(
         uploader = YouTubeUploader(youtube_config, retry_config, store)
         with (
             patch(
-                "uploaders.youtube.Credentials.from_authorized_user_file",
+                "youtube_api.Credentials.from_authorized_user_file",
                 return_value=credentials,
             ),
-            patch("uploaders.youtube.Request", return_value=MagicMock()) as request,
+            patch("youtube_api.Request", return_value=MagicMock()) as request,
             patch(
-                "uploaders.youtube.InstalledAppFlow.from_client_secrets_file"
+                "youtube_api.InstalledAppFlow.from_client_secrets_file"
             ) as flow,
         ):
             assert uploader._get_credentials() is credentials
@@ -190,11 +192,11 @@ def test_falls_back_to_interactive_oauth_when_cached_token_cannot_be_used(
         uploader = YouTubeUploader(youtube_config, retry_config, store)
         with (
             patch(
-                "uploaders.youtube.Credentials.from_authorized_user_file",
+                "youtube_api.Credentials.from_authorized_user_file",
                 return_value=credentials,
             ),
             patch(
-                "uploaders.youtube.InstalledAppFlow.from_client_secrets_file",
+                "youtube_api.InstalledAppFlow.from_client_secrets_file",
                 return_value=flow,
             ) as create_flow,
         ):
@@ -255,7 +257,7 @@ def test_quota_is_rejected_before_service_or_upload_is_created(
             replace(youtube_config, daily_upload_limit=1), retry_config, store
         )
         with (
-            patch("uploaders.youtube.build") as mocked_build,
+            patch("youtube_api.build") as mocked_build,
             patch("uploaders.youtube.MediaFileUpload") as media_upload,
         ):
             result = uploader.upload(video, "Title", "Description", [])

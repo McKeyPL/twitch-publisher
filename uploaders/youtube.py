@@ -13,25 +13,17 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 import httplib2
-from google.auth.exceptions import RefreshError
-from google.auth.transport.requests import Request
-from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
-from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaFileUpload
 
 from config import RetryConfig, YouTubeConfig
 from state import StateStore
 from uploaders.base import BaseUploader, UploadResult
+from youtube_api import SCOPES, YouTubeApiClient
 
 
 logger = logging.getLogger(__name__)
 
-SCOPES = [
-    "https://www.googleapis.com/auth/youtube.upload",
-    "https://www.googleapis.com/auth/youtube.force-ssl",
-]
 RETRIABLE_HTTP_STATUS_CODES = {500, 502, 503, 504}
 VIDEO_CHUNK_SIZE = 50 * 1024 * 1024
 PACIFIC_TIME = ZoneInfo("America/Los_Angeles")
@@ -112,52 +104,19 @@ class YouTubeUploader(BaseUploader):
         super().__init__(retry_config, cancel_event)
         self.config = config
         self.state_store = state_store
+        self.api_client = YouTubeApiClient(config)
         self._service: Any | None = None
 
     @property
     def platform_name(self) -> str:
         return "youtube"
 
-    def _get_credentials(self) -> Credentials:
-        credentials: Credentials | None = None
-        token_path = self.config.token_file
-
-        if token_path.is_file():
-            try:
-                credentials = Credentials.from_authorized_user_file(token_path, SCOPES)
-            except (OSError, ValueError) as exc:
-                logger.warning("Cannot use OAuth token %s: %s", token_path, exc)
-
-        if credentials and credentials.expired and credentials.refresh_token:
-            try:
-                credentials.refresh(Request())
-            except RefreshError as exc:
-                logger.warning("Automatic token refresh failed: %s", exc)
-                credentials = None
-
-        has_scopes = bool(credentials and credentials.has_scopes(SCOPES))
-        if not credentials or not credentials.valid or not has_scopes:
-            if self.config.client_secrets_file is None:
-                raise RuntimeError("client_secrets_file is missing for YouTube OAuth")
-            flow = InstalledAppFlow.from_client_secrets_file(
-                str(self.config.client_secrets_file),
-                SCOPES,
-            )
-            logger.info("Opening a browser for YouTube OAuth2 authorization")
-            credentials = flow.run_local_server(port=0, open_browser=True)
-
-        token_path.parent.mkdir(parents=True, exist_ok=True)
-        token_path.write_text(credentials.to_json(), encoding="utf-8")
-        return credentials
+    def _get_credentials(self) -> Any:
+        return self.api_client.get_credentials()
 
     def _get_service(self) -> Any:
         if self._service is None:
-            self._service = build(
-                "youtube",
-                "v3",
-                credentials=self._get_credentials(),
-                cache_discovery=False,
-            )
+            self._service = self.api_client.get_service()
         return self._service
 
     def _prepare_srt(self, srt_path: Path | None) -> tuple[Path | None, str | None]:
