@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 from .detector import parse_iso8601_duration
 
@@ -24,15 +24,21 @@ class ApiVideo:
 
 
 class YouTubeCopyrightApi:
-    def __init__(self, service: Any) -> None:
+    def __init__(self, service: Any, quota_callback: Callable[[int], None] | None = None) -> None:
         self.service = service
+        self.quota_callback = quota_callback
+
+    def _execute(self, request: Any, *, quota_cost: int = 1) -> dict[str, Any]:
+        if self.quota_callback is not None:
+            self.quota_callback(quota_cost)
+        return request.execute()
 
     def list_uploaded_video_ids(self) -> list[str]:
-        response = (
+        request = (
             self.service.channels()
             .list(part="contentDetails", mine=True, maxResults=1)
-            .execute()
         )
+        response = self._execute(request)
         channels = response.get("items", [])
         if len(channels) != 1:
             raise RuntimeError(
@@ -56,7 +62,7 @@ class YouTubeCopyrightApi:
                 maxResults=50,
                 pageToken=page_token,
             )
-            page = request.execute()
+            page = self._execute(request)
             for item in page.get("items", []):
                 video_id = item.get("contentDetails", {}).get("videoId")
                 if video_id and video_id not in video_ids:
@@ -69,7 +75,7 @@ class YouTubeCopyrightApi:
         normalized = list(dict.fromkeys(value.strip() for value in video_ids if value.strip()))
         results: list[ApiVideo] = []
         for batch in _batches(normalized, VIDEO_BATCH_SIZE):
-            response = (
+            request = (
                 self.service.videos()
                 .list(
                     part="contentDetails,processingDetails,snippet,status",
@@ -81,8 +87,8 @@ class YouTubeCopyrightApi:
                         "status/rejectionReason,processingDetails/processingStatus)"
                     ),
                 )
-                .execute()
             )
+            response = self._execute(request)
             for item in response.get("items", []):
                 content_details = dict(item.get("contentDetails", {}))
                 status = item.get("status", {})
