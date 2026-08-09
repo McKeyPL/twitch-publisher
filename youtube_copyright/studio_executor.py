@@ -231,11 +231,14 @@ class StudioCopyrightExecutor:
             continue_buttons[0].click()
             self.page.wait_for_timeout(300)
 
-        final_aliases = (
-            _ALIASES["confirm_trim"]
-            if action is RemediationAction.TRIM
-            else _ALIASES["confirm_mute"]
-        )
+        self._accept_confirmation_checkbox()
+
+        if action is RemediationAction.TRIM:
+            final_aliases = _ALIASES["confirm_trim"]
+        elif action is RemediationAction.ERASE_SONG:
+            final_aliases = _ALIASES["erase_song"]
+        else:
+            final_aliases = _ALIASES["confirm_mute"]
         final_buttons = self._visible_exact_locators("button", final_aliases)
         if not final_buttons:
             final_buttons = self._visible_exact_locators("button", _ALIASES["save"])
@@ -244,6 +247,27 @@ class StudioCopyrightExecutor:
                 f"Expected one final {action.value} confirmation, got {len(final_buttons)}"
             )
         final_buttons[0].click()
+
+    def _accept_confirmation_checkbox(self) -> None:
+        """Accept the sole permanent-edit acknowledgement, when Studio shows it."""
+
+        locator = self.page.get_by_role("checkbox")
+        visible: list[Any] = []
+        for index in range(locator.count()):
+            candidate = locator.nth(index)
+            if candidate.is_visible():
+                visible.append(candidate)
+        if len(visible) > 1:
+            raise StudioAmbiguousUi(
+                f"Expected at most one edit confirmation checkbox, got {len(visible)}"
+            )
+        if not visible:
+            return
+        checkbox = visible[0]
+        if not checkbox.is_checked():
+            checkbox.check()
+            self.page.wait_for_timeout(250)
+        self.diagnostic.screenshot(self.page, "permanent_edit_acknowledged")
 
     def _wait_for_submitted_marker(self) -> None:
         pattern = _pattern(_SUBMITTED_MARKERS)

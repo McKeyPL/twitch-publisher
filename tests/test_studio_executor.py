@@ -20,12 +20,19 @@ class FakeElement:
     def __init__(self, label: str) -> None:
         self.label = label
         self.clicks = 0
+        self.checked = False
 
     def click(self) -> None:
         self.clicks += 1
 
     def is_visible(self) -> bool:
         return True
+
+    def is_checked(self) -> bool:
+        return self.checked
+
+    def check(self) -> None:
+        self.checked = True
 
     def evaluate(self, script: str) -> str:
         return f"<{self.label}>"
@@ -128,9 +135,19 @@ class FakePage:
         assert selector == "body"
         return FakeBody(self.body_text)
 
-    def get_by_role(self, role: str, *, name: re.Pattern[str], exact: bool):
+    def get_by_role(
+        self,
+        role: str,
+        *,
+        name: re.Pattern[str] | None = None,
+        exact: bool | None = None,
+    ):
         return FakeLocatorList(
-            [element for element in self.roles.get(role, []) if name.search(element.label)]
+            [
+                element
+                for element in self.roles.get(role, [])
+                if name is None or name.search(element.label)
+            ]
         )
 
     def get_by_text(self, pattern: re.Pattern[str], exact: bool):
@@ -241,6 +258,32 @@ def test_automatic_trim_requires_and_clicks_one_confirmation(tmp_path: Path) -> 
     )
     assert result.submitted
     assert page.roles["button"][1].clicks == 1
+
+
+def test_automatic_erase_accepts_permanent_edit_checkbox(tmp_path: Path) -> None:
+    page = FakePage(
+        tmp_path,
+        {
+            "button": ["Take action", "Continue", "Erase song"],
+            "menuitem": ["Erase song"],
+            "checkbox": ["I understand this edit is permanent"],
+        },
+    )
+    parsed = StudioClaimParser().parse_rows(
+        "video123",
+        [{"text": "Song\nAudio", "actions": ""}],
+    )[0]
+    result = StudioCopyrightExecutor(page, _diagnostic(tmp_path)).execute(
+        "video123",
+        parsed,
+        RemediationAction.ERASE_SONG,
+        dry_run=False,
+        trace_path=None,
+    )
+    assert result.submitted
+    assert page.roles["button"][1].clicks == 1
+    assert page.roles["checkbox"][0].checked
+    assert page.roles["button"][2].clicks == 1
 
 
 def test_executor_refuses_wrong_video_page(tmp_path: Path) -> None:
