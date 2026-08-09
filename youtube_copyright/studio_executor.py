@@ -35,6 +35,7 @@ _ALIASES = {
     "trim": ("trim out segment", "trim segment", "wytnij fragment", "przytnij fragment"),
     "continue": ("continue", "dalej", "kontynuuj"),
     "save": ("save", "zapisz"),
+    "confirm_changes": ("confirm changes", "potwierdź zmiany"),
     "confirm_mute": ("mute", "wycisz"),
     "confirm_trim": ("trim", "przytnij", "wytnij"),
 }
@@ -228,8 +229,10 @@ class StudioCopyrightExecutor:
         )
 
     def _submit_confirmation(self, action: RemediationAction) -> None:
-        # Studio occasionally presents Continue before the irreversible final
-        # confirmation. Bound the sequence and never click an unrelated button.
+        # The current Studio flow has three separate screens:
+        # action picker -> edit settings (Save) -> permanent-edit acknowledgement.
+        # Older variants can omit either intermediate screen, so every transition
+        # is detected from the visible controls instead of assuming one layout.
         continue_buttons = self._visible_exact_locators("button", _ALIASES["continue"])
         if len(continue_buttons) > 1:
             raise StudioAmbiguousUi("More than one visible Continue button")
@@ -237,7 +240,37 @@ class StudioCopyrightExecutor:
             continue_buttons[0].click()
             self.page.wait_for_timeout(300)
 
-        self._accept_confirmation_checkbox()
+        # Some older Studio variants show the acknowledgement immediately.
+        if self._accept_confirmation_checkbox():
+            self._click_final_confirmation(action, allow_save=True)
+            return
+
+        # In the current UI this commits the edit settings and only then opens
+        # the irreversible-change dialog containing the checkbox.
+        self._click_final_confirmation(action, allow_save=True)
+        self.page.wait_for_timeout(500)
+        self.diagnostic.screenshot(self.page, "permanent_edit_confirmation")
+
+        if not self._accept_confirmation_checkbox():
+            # Trim and some legacy flows submit directly on the previous click.
+            return
+
+        confirm_buttons = self._visible_exact_locators(
+            "button", _ALIASES["confirm_changes"]
+        )
+        if len(confirm_buttons) != 1:
+            raise StudioAmbiguousUi(
+                "Expected one permanent-edit confirmation button, "
+                f"got {len(confirm_buttons)}"
+            )
+        confirm_buttons[0].click()
+
+    def _click_final_confirmation(
+        self,
+        action: RemediationAction,
+        *,
+        allow_save: bool,
+    ) -> None:
 
         if action is RemediationAction.TRIM:
             final_aliases = _ALIASES["confirm_trim"]
@@ -246,7 +279,7 @@ class StudioCopyrightExecutor:
         else:
             final_aliases = _ALIASES["confirm_mute"]
         final_buttons = self._visible_exact_locators("button", final_aliases)
-        if not final_buttons:
+        if not final_buttons and allow_save:
             final_buttons = self._visible_exact_locators("button", _ALIASES["save"])
         if len(final_buttons) != 1:
             raise StudioAmbiguousUi(
@@ -254,7 +287,7 @@ class StudioCopyrightExecutor:
             )
         final_buttons[0].click()
 
-    def _accept_confirmation_checkbox(self) -> None:
+    def _accept_confirmation_checkbox(self) -> bool:
         """Accept the sole permanent-edit acknowledgement, when Studio shows it."""
 
         locator = self.page.get_by_role("checkbox")
@@ -268,12 +301,13 @@ class StudioCopyrightExecutor:
                 f"Expected at most one edit confirmation checkbox, got {len(visible)}"
             )
         if not visible:
-            return
+            return False
         checkbox = visible[0]
         if not checkbox.is_checked():
             checkbox.check()
             self.page.wait_for_timeout(250)
         self.diagnostic.screenshot(self.page, "permanent_edit_acknowledged")
+        return True
 
     def _wait_for_submitted_marker(self) -> None:
         pattern = _pattern(_SUBMITTED_MARKERS)

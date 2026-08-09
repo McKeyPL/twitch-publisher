@@ -17,13 +17,16 @@ from youtube_copyright.studio_parser import StudioClaimParser, _CLAIM_EXTRACTION
 
 
 class FakeElement:
-    def __init__(self, label: str) -> None:
+    def __init__(self, label: str, on_click=None) -> None:
         self.label = label
         self.clicks = 0
         self.checked = False
+        self.on_click = on_click
 
     def click(self) -> None:
         self.clicks += 1
+        if self.on_click is not None:
+            self.on_click()
 
     def is_visible(self) -> bool:
         return True
@@ -296,6 +299,46 @@ def test_automatic_erase_accepts_permanent_edit_checkbox(tmp_path: Path) -> None
     assert page.roles["button"][1].clicks == 1
     assert page.roles["checkbox"][0].checked
     assert page.roles["button"][2].clicks == 1
+
+
+def test_current_erase_flow_saves_before_permanent_edit_confirmation(
+    tmp_path: Path,
+) -> None:
+    page = FakePage(
+        tmp_path,
+        {
+            "button": ["Take action", "Continue"],
+            "menuitem": ["Erase song"],
+        },
+    )
+    take_action, continue_button = page.roles["button"]
+    checkbox = FakeElement("I understand this edit is permanent")
+    confirm_changes = FakeElement("Confirm changes")
+
+    def show_permanent_edit_dialog() -> None:
+        page.roles["button"] = [take_action, confirm_changes]
+        page.roles["checkbox"] = [checkbox]
+
+    save_button = FakeElement("Save", on_click=show_permanent_edit_dialog)
+    page.roles["button"].append(save_button)
+    parsed = StudioClaimParser().parse_rows(
+        "video123",
+        [{"text": "Song\nAudio", "actions": ""}],
+    )[0]
+
+    result = StudioCopyrightExecutor(page, _diagnostic(tmp_path)).execute(
+        "video123",
+        parsed,
+        RemediationAction.ERASE_SONG,
+        dry_run=False,
+        trace_path=None,
+    )
+
+    assert result.submitted
+    assert continue_button.clicks == 1
+    assert save_button.clicks == 1
+    assert checkbox.checked
+    assert confirm_changes.clicks == 1
 
 
 def test_executor_refuses_wrong_video_page(tmp_path: Path) -> None:
