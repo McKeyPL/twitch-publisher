@@ -151,11 +151,16 @@ class CopyrightGuardService:
 
             submitted = 0
             if mode != "report":
-                for video_id in actionable[: self.config.youtube_copyright.max_actions_per_cycle]:
+                for video_id in actionable:
                     if self.stop_event.is_set():
                         break
                     if self._remediate_video(video_id, run_id):
                         submitted += 1
+                        if (
+                            submitted
+                            >= self.config.youtube_copyright.max_actions_per_cycle
+                        ):
+                            break
 
             result = CycleResult(
                 run_id=run_id,

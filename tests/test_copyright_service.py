@@ -177,6 +177,45 @@ def test_automatic_cycle_submits_one_studio_action(tmp_path: Path) -> None:
     executor.execute.assert_called_once()
 
 
+def test_action_limit_counts_submissions_not_processing_candidates(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    from dataclasses import replace
+
+    config = replace(
+        config,
+        youtube_copyright=replace(
+            config.youtube_copyright,
+            mode="automatic",
+            max_actions_per_cycle=2,
+        ),
+    )
+    ids = ["processing-video", "first-action", "second-action", "not-reached"]
+    service_api = _service_for(
+        [_resource(video_id, {"allowed": []}) for video_id in ids]
+    )
+    with (
+        StateStore(config.paths.database) as quota_store,
+        CopyrightStateStore(config.paths.database) as copyright_store,
+    ):
+        guard = CopyrightGuardService(
+            config,
+            copyright_store,
+            quota_store,
+            api_service=service_api,
+        )
+        with patch.object(
+            guard,
+            "_remediate_video",
+            side_effect=[False, True, True],
+        ) as remediate:
+            result = guard.run_cycle(video_ids=ids, include_channel_uploads=False)
+
+    assert result.actions_submitted == 2
+    assert [call.args[0] for call in remediate.call_args_list] == ids[:3]
+
+
 def test_trim_resolution_retimes_owned_captions_before_resolved(tmp_path: Path) -> None:
     config = _config(tmp_path)
     from dataclasses import replace
