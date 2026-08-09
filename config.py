@@ -136,6 +136,44 @@ class BrowserConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class CopyrightBrowserConfig:
+    storage_state_file: Path
+    user_data_directory: Path
+    headless: bool
+    locale: str
+    trace_mode: str
+    screenshots: bool
+    console_logging: bool
+    failed_request_logging: bool
+    navigation_timeout_seconds: float
+    action_timeout_seconds: float
+
+
+@dataclass(frozen=True, slots=True)
+class CopyrightDiagnosticsConfig:
+    directory: Path
+    retention_days: int
+
+
+@dataclass(frozen=True, slots=True)
+class YouTubeCopyrightConfig:
+    enabled: bool
+    interval_hours: float
+    mode: str
+    global_blocks: bool
+    protected_regions: tuple[str, ...]
+    ignore_other_regional_blocks: bool
+    preferred_audio_action: str
+    audio_fallback_action: str
+    visual_action: str
+    max_actions_per_cycle: int
+    max_trim_fraction: float
+    min_remaining_seconds: float
+    browser: CopyrightBrowserConfig
+    diagnostics: CopyrightDiagnosticsConfig
+
+
+@dataclass(frozen=True, slots=True)
 class MetadataConfig:
     title_template: str
     remove_bang_tags: bool
@@ -185,6 +223,7 @@ class Config:
     watcher: WatcherConfig
     platforms: PlatformsConfig
     browser: BrowserConfig
+    youtube_copyright: YouTubeCopyrightConfig
     metadata: MetadataConfig
     retry: RetryConfig
     splitting: SplittingConfig
@@ -224,6 +263,34 @@ def _positive_float(value: Any, location: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
         raise ConfigError(f"{location} must be greater than zero")
     return float(value)
+
+
+def _fraction(value: Any, location: str) -> float:
+    result = _positive_float(value, location)
+    if result > 1:
+        raise ConfigError(f"{location} must be greater than zero and at most 1")
+    return result
+
+
+def _choice(value: Any, location: str, choices: set[str]) -> str:
+    result = _string(value, location).lower()
+    if result not in choices:
+        allowed = ", ".join(sorted(choices))
+        raise ConfigError(f"{location} must be one of: {allowed}")
+    return result
+
+
+def _region_codes(value: Any, location: str) -> tuple[str, ...]:
+    if not isinstance(value, list) or not value:
+        raise ConfigError(f"{location} must be a non-empty list of ISO region codes")
+    result: list[str] = []
+    for index, item in enumerate(value):
+        code = _string(item, f"{location}[{index}]").upper()
+        if not re.fullmatch(r"[A-Z]{2}", code):
+            raise ConfigError(f"{location}[{index}] must be a two-letter ISO region code")
+        if code not in result:
+            result.append(code)
+    return tuple(result)
 
 
 def _positive_int(value: Any, location: str) -> int:
@@ -358,6 +425,17 @@ def config_from_dict(raw: Mapping[str, Any]) -> Config:
     platforms = _mapping(_required(root, "platforms", "config"), "platforms")
     youtube = _mapping(_required(platforms, "youtube", "platforms"), "platforms.youtube")
     browser = _mapping(_required(root, "browser", "config"), "browser")
+    copyright_raw = _mapping(
+        _required(root, "youtube_copyright", "config"), "youtube_copyright"
+    )
+    copyright_browser = _mapping(
+        _required(copyright_raw, "browser", "youtube_copyright"),
+        "youtube_copyright.browser",
+    )
+    copyright_diagnostics = _mapping(
+        _required(copyright_raw, "diagnostics", "youtube_copyright"),
+        "youtube_copyright.diagnostics",
+    )
     metadata = _mapping(_required(root, "metadata", "config"), "metadata")
     retry = _mapping(_required(root, "retry", "config"), "retry")
     splitting = _mapping(_required(root, "splitting", "config"), "splitting")
@@ -553,6 +631,161 @@ def config_from_dict(raw: Mapping[str, Any]) -> Config:
             debug_screenshot_interval_seconds=_positive_float(
                 browser.get("debug_screenshot_interval_seconds", 300),
                 "browser.debug_screenshot_interval_seconds",
+            ),
+        ),
+        youtube_copyright=YouTubeCopyrightConfig(
+            enabled=_boolean(
+                _required(copyright_raw, "enabled", "youtube_copyright"),
+                "youtube_copyright.enabled",
+            ),
+            interval_hours=_positive_float(
+                _required(copyright_raw, "interval_hours", "youtube_copyright"),
+                "youtube_copyright.interval_hours",
+            ),
+            mode=_choice(
+                _required(copyright_raw, "mode", "youtube_copyright"),
+                "youtube_copyright.mode",
+                {"report", "dry_run", "automatic"},
+            ),
+            global_blocks=_boolean(
+                _required(copyright_raw, "global_blocks", "youtube_copyright"),
+                "youtube_copyright.global_blocks",
+            ),
+            protected_regions=_region_codes(
+                _required(copyright_raw, "protected_regions", "youtube_copyright"),
+                "youtube_copyright.protected_regions",
+            ),
+            ignore_other_regional_blocks=_boolean(
+                _required(
+                    copyright_raw,
+                    "ignore_other_regional_blocks",
+                    "youtube_copyright",
+                ),
+                "youtube_copyright.ignore_other_regional_blocks",
+            ),
+            preferred_audio_action=_choice(
+                _required(
+                    copyright_raw, "preferred_audio_action", "youtube_copyright"
+                ),
+                "youtube_copyright.preferred_audio_action",
+                {"erase_song", "mute_all", "trim"},
+            ),
+            audio_fallback_action=_choice(
+                _required(
+                    copyright_raw, "audio_fallback_action", "youtube_copyright"
+                ),
+                "youtube_copyright.audio_fallback_action",
+                {"mute_all", "trim"},
+            ),
+            visual_action=_choice(
+                _required(copyright_raw, "visual_action", "youtube_copyright"),
+                "youtube_copyright.visual_action",
+                {"trim"},
+            ),
+            max_actions_per_cycle=_positive_int(
+                _required(
+                    copyright_raw, "max_actions_per_cycle", "youtube_copyright"
+                ),
+                "youtube_copyright.max_actions_per_cycle",
+            ),
+            max_trim_fraction=_fraction(
+                _required(copyright_raw, "max_trim_fraction", "youtube_copyright"),
+                "youtube_copyright.max_trim_fraction",
+            ),
+            min_remaining_seconds=_positive_float(
+                _required(
+                    copyright_raw, "min_remaining_seconds", "youtube_copyright"
+                ),
+                "youtube_copyright.min_remaining_seconds",
+            ),
+            browser=CopyrightBrowserConfig(
+                storage_state_file=_path(
+                    _required(
+                        copyright_browser,
+                        "storage_state_file",
+                        "youtube_copyright.browser",
+                    ),
+                    "youtube_copyright.browser.storage_state_file",
+                ),
+                user_data_directory=_path(
+                    _required(
+                        copyright_browser,
+                        "user_data_directory",
+                        "youtube_copyright.browser",
+                    ),
+                    "youtube_copyright.browser.user_data_directory",
+                ),
+                headless=_boolean(
+                    _required(copyright_browser, "headless", "youtube_copyright.browser"),
+                    "youtube_copyright.browser.headless",
+                ),
+                locale=_string(
+                    _required(copyright_browser, "locale", "youtube_copyright.browser"),
+                    "youtube_copyright.browser.locale",
+                ),
+                trace_mode=_choice(
+                    _required(
+                        copyright_browser, "trace_mode", "youtube_copyright.browser"
+                    ),
+                    "youtube_copyright.browser.trace_mode",
+                    {"off", "on_error", "always"},
+                ),
+                screenshots=_boolean(
+                    _required(
+                        copyright_browser, "screenshots", "youtube_copyright.browser"
+                    ),
+                    "youtube_copyright.browser.screenshots",
+                ),
+                console_logging=_boolean(
+                    _required(
+                        copyright_browser,
+                        "console_logging",
+                        "youtube_copyright.browser",
+                    ),
+                    "youtube_copyright.browser.console_logging",
+                ),
+                failed_request_logging=_boolean(
+                    _required(
+                        copyright_browser,
+                        "failed_request_logging",
+                        "youtube_copyright.browser",
+                    ),
+                    "youtube_copyright.browser.failed_request_logging",
+                ),
+                navigation_timeout_seconds=_positive_float(
+                    _required(
+                        copyright_browser,
+                        "navigation_timeout_seconds",
+                        "youtube_copyright.browser",
+                    ),
+                    "youtube_copyright.browser.navigation_timeout_seconds",
+                ),
+                action_timeout_seconds=_positive_float(
+                    _required(
+                        copyright_browser,
+                        "action_timeout_seconds",
+                        "youtube_copyright.browser",
+                    ),
+                    "youtube_copyright.browser.action_timeout_seconds",
+                ),
+            ),
+            diagnostics=CopyrightDiagnosticsConfig(
+                directory=_path(
+                    _required(
+                        copyright_diagnostics,
+                        "directory",
+                        "youtube_copyright.diagnostics",
+                    ),
+                    "youtube_copyright.diagnostics.directory",
+                ),
+                retention_days=_positive_int(
+                    _required(
+                        copyright_diagnostics,
+                        "retention_days",
+                        "youtube_copyright.diagnostics",
+                    ),
+                    "youtube_copyright.diagnostics.retention_days",
+                ),
             ),
         ),
         metadata=MetadataConfig(

@@ -87,6 +87,12 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(config.splitting.youtube_target_duration_hours, 11.75)
         self.assertEqual(config.splitting.youtube_target_size_gb, 250.0)
         self.assertEqual(config.splitting.rumble_target_size_gb, 14.5)
+        self.assertTrue(config.youtube_copyright.enabled)
+        self.assertEqual(config.youtube_copyright.interval_hours, 2.0)
+        self.assertEqual(config.youtube_copyright.mode, "automatic")
+        self.assertEqual(config.youtube_copyright.protected_regions, ("PL", "DE"))
+        self.assertEqual(config.youtube_copyright.max_trim_fraction, 0.9)
+        self.assertEqual(config.youtube_copyright.browser.trace_mode, "always")
 
     def test_loads_rumble_license_from_environment(self) -> None:
         with patch.dict(
@@ -203,6 +209,31 @@ class ConfigValidationTests(unittest.TestCase):
         raw["paths"]["recordings_root"] = "/srv/twitch-recordings"
         config = config_from_dict(raw)
         self.assertEqual(config.paths.recordings_root.as_posix(), "/srv/twitch-recordings")
+
+    def test_rejects_invalid_copyright_regions(self) -> None:
+        for regions in ([], ["POL"], [1]):
+            with self.subTest(regions=regions):
+                raw = valid_raw_config()
+                raw["youtube_copyright"]["protected_regions"] = regions
+                with self.assertRaisesRegex(ConfigError, "protected_regions"):
+                    config_from_dict(raw)
+
+    def test_normalizes_and_deduplicates_copyright_regions(self) -> None:
+        raw = valid_raw_config()
+        raw["youtube_copyright"]["protected_regions"] = ["pl", "DE", "PL"]
+        config = config_from_dict(raw)
+        self.assertEqual(config.youtube_copyright.protected_regions, ("PL", "DE"))
+
+    def test_rejects_invalid_copyright_policy(self) -> None:
+        raw = valid_raw_config()
+        raw["youtube_copyright"]["mode"] = "unsafe"
+        with self.assertRaisesRegex(ConfigError, "youtube_copyright.mode"):
+            config_from_dict(raw)
+
+        raw = valid_raw_config()
+        raw["youtube_copyright"]["max_trim_fraction"] = 1.01
+        with self.assertRaisesRegex(ConfigError, "max_trim_fraction"):
+            config_from_dict(raw)
 
 
 if __name__ == "__main__":

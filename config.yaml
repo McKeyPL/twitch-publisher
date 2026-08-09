@@ -91,6 +91,39 @@ browser:
   debug_directory: logs/browser_debug
   debug_screenshot_interval_seconds: 300
 
+# Standalone YouTube Studio copyright-remediation process. It is never started
+# by main.py; use start-copyright-guard.ps1 or start-copyright-guard.sh.
+youtube_copyright:
+  enabled: true
+  interval_hours: 2
+  mode: automatic # report | dry_run | automatic
+  global_blocks: true
+  protected_regions:
+    - PL
+    - DE
+  ignore_other_regional_blocks: true
+  preferred_audio_action: erase_song
+  audio_fallback_action: mute_all
+  visual_action: trim
+  max_actions_per_cycle: 2
+  max_trim_fraction: 0.90
+  min_remaining_seconds: 60
+  browser:
+    storage_state_file: auth/youtube_studio_state.json
+    user_data_directory: auth/youtube_studio_profile
+    headless: false
+    locale: en-US
+    # Keep successful traces during the initial burn-in; switch to on_error later.
+    trace_mode: always # off | on_error | always
+    screenshots: true
+    console_logging: true
+    failed_request_logging: true
+    navigation_timeout_seconds: 60
+    action_timeout_seconds: 600
+  diagnostics:
+    directory: logs/youtube_copyright
+    retention_days: 14
+
 metadata:
   title_template: '{clean_title} | {channel} | {date_YYYY-MM-DD}'
   remove_bang_tags: true
