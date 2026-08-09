@@ -7,6 +7,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -199,28 +200,64 @@ class StudioBrowserManager:
         print(
             "[youtube-studio] Sign in to YouTube Studio in the regular browser.\n"
             "[youtube-studio] When Studio has loaded, CLOSE THAT BROWSER WINDOW "
-            "completely. Verification will then start automatically."
+            "completely, then return here and press Enter."
         )
         try:
-            completed = subprocess.run(command, check=False)
+            process = subprocess.Popen(command)
         except OSError as exc:
             raise StudioBrowserError(
                 f"Could not start the configured login browser: {executable}: {exc}"
             ) from exc
-        if completed.returncode != 0:
-            raise StudioBrowserError(
-                f"The manual login browser exited with code {completed.returncode}"
+        input("[youtube-studio] Press Enter after closing the dedicated browser: ")
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            logger.info(
+                "The browser launcher process is still alive; waiting for the profile "
+                "lock to be released"
             )
 
-        try:
-            with self.open(f"{run_id}-verification"):
-                logger.info("The manually created YouTube Studio session is valid")
-        except StudioAuthRequired as exc:
-            raise StudioAuthRequired(
-                "The regular browser closed, but the dedicated profile is not signed "
-                "in to YouTube Studio. Run --login again and wait until Studio itself "
-                "has loaded before closing the window."
-            ) from exc
+        for attempt in range(1, 16):
+            try:
+                with self.open(f"{run_id}-verification"):
+                    logger.info("The manually created YouTube Studio session is valid")
+                return
+            except StudioAuthRequired as exc:
+                raise StudioAuthRequired(
+                    "The regular browser closed, but the dedicated profile is not "
+                    "signed in to YouTube Studio. Run --login again and wait until "
+                    "Studio itself has loaded before closing the window."
+                ) from exc
+            except Exception as exc:
+                if self._profile_is_busy(exc) and attempt < 15:
+                    logger.info(
+                        "The dedicated Chrome profile is still closing; verification "
+                        "retry %d/15",
+                        attempt + 1,
+                    )
+                    time.sleep(1)
+                    continue
+                if self._profile_is_busy(exc):
+                    raise StudioBrowserError(
+                        "The dedicated YouTube Studio browser profile is still in use. "
+                        "Close every Chrome/Edge window opened for the guard and run "
+                        "--login again."
+                    ) from exc
+                raise StudioBrowserError(
+                    f"Could not verify the YouTube Studio browser session: {exc}"
+                ) from exc
+
+    @staticmethod
+    def _profile_is_busy(error: Exception) -> bool:
+        message = str(error).casefold()
+        return any(
+            marker in message
+            for marker in (
+                "opening in existing browser session",
+                "profile is already in use",
+                "user data directory is already in use",
+            )
+        )
 
     def _resolve_browser_executable(self) -> Path:
         configured = self.browser_config.executable_path

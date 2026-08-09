@@ -334,8 +334,9 @@ Linux equivalent:
 `-Login` opens the installed browser directly, without Playwright or remote
 debugging. Complete Google login, MFA, or CAPTCHA and wait until YouTube Studio
 itself has loaded. Then close that browser window completely. The launcher
-automatically reopens the same dedicated profile through Playwright and verifies
-the session. Do not try to sign in in this second, automation-controlled window.
+asks you to press Enter, waits for Chrome to release the profile, and reopens the
+same dedicated profile through Playwright to verify the session. Do not try to
+sign in in this second, automation-controlled window.
 
 The profile is stored in `auth/youtube_studio_profile`; its storage-state backup
 is `auth/youtube_studio_state.json`. Both are ignored by Git. Never copy either

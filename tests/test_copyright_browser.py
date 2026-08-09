@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 import os
-from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -99,20 +98,47 @@ def test_manual_login_uses_regular_browser_then_verifies_profile(
 
     with (
         patch.object(manager, "_resolve_browser_executable", return_value=executable),
-        patch("youtube_copyright.browser_session.subprocess.run") as run_browser,
+        patch("youtube_copyright.browser_session.subprocess.Popen") as open_browser,
+        patch("builtins.input", return_value="") as confirm_closed,
         patch.object(manager, "open", return_value=verified_session) as open_session,
     ):
-        run_browser.return_value = SimpleNamespace(returncode=0)
+        open_browser.return_value.wait.return_value = 0
         manager.login()
 
-    command = run_browser.call_args.args[0]
+    command = open_browser.call_args.args[0]
     assert command[0] == str(executable)
     assert any(argument.startswith("--user-data-dir=") for argument in command)
     assert "--remote-debugging-port" not in " ".join(command)
     assert command[-1] == "https://studio.youtube.com/"
+    confirm_closed.assert_called_once()
     open_session.assert_called_once_with("interactive-login-verification")
     verified_session.__enter__.assert_called_once()
     verified_session.__exit__.assert_called_once()
+
+
+def test_manual_login_retries_until_chrome_profile_is_released(
+    tmp_path: Path,
+) -> None:
+    manager = StudioBrowserManager(_browser_config(tmp_path), _diagnostics(tmp_path))
+    executable = tmp_path / "chrome.exe"
+    executable.touch()
+    verified_session = MagicMock()
+    busy = RuntimeError("Opening in existing browser session")
+
+    with (
+        patch.object(manager, "_resolve_browser_executable", return_value=executable),
+        patch("youtube_copyright.browser_session.subprocess.Popen") as open_browser,
+        patch("builtins.input", return_value=""),
+        patch("youtube_copyright.browser_session.time.sleep") as sleep,
+        patch.object(
+            manager, "open", side_effect=[busy, verified_session]
+        ) as open_session,
+    ):
+        open_browser.return_value.wait.return_value = 0
+        manager.login()
+
+    assert open_session.call_count == 2
+    sleep.assert_called_once_with(1)
 
 
 def test_refuses_unattended_login_when_session_expired(tmp_path: Path) -> None:
