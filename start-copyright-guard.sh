@@ -6,6 +6,7 @@ CONFIG="config.yaml"
 ONCE=false
 DRY_RUN=false
 BROWSER_DEBUG=false
+LOGIN=false
 RESTART_DELAY=10
 VIDEO_IDS=()
 CHILD_PID=""
@@ -17,6 +18,7 @@ Usage: ./start-copyright-guard.sh [options]
   --once
   --dry-run
   --browser-debug
+  --login
   --video-id ID             May be repeated
   --restart-delay SECONDS
 EOF
@@ -28,6 +30,7 @@ while (($#)); do
         --once) ONCE=true; shift ;;
         --dry-run) DRY_RUN=true; shift ;;
         --browser-debug) BROWSER_DEBUG=true; shift ;;
+        --login) LOGIN=true; shift ;;
         --video-id) VIDEO_IDS+=("$2"); shift 2 ;;
         --restart-delay) RESTART_DELAY="$2"; shift 2 ;;
         -h|--help) usage; exit 0 ;;
@@ -59,6 +62,7 @@ while true; do
     $ONCE && args+=(--once)
     $DRY_RUN && args+=(--dry-run)
     $BROWSER_DEBUG && args+=(--browser-debug)
+    $LOGIN && args+=(--login)
     for id in "${VIDEO_IDS[@]}"; do args+=(--video-id "$id"); done
 
     .venv/bin/python "${args[@]}" &

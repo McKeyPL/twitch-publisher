@@ -15,6 +15,7 @@ from config import Config, load_config
 from state import StateStore
 from youtube_copyright.service import CopyrightGuardService
 from youtube_copyright.state import CopyrightStateStore
+from youtube_copyright.browser_session import StudioBrowserManager
 
 
 logger = logging.getLogger(__name__)
@@ -105,6 +106,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--video-id", action="append", default=[])
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--browser-debug", action="store_true")
+    parser.add_argument(
+        "--login",
+        action="store_true",
+        help="Open a visible browser and create/refresh the YouTube Studio session",
+    )
     return parser
 
 
@@ -127,6 +133,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             ),
         )
     config = replace(config, youtube_copyright=copyright_config)
+    if args.login:
+        configure_logging(config)
+        manager = StudioBrowserManager(
+            config.youtube_copyright.browser,
+            config.youtube_copyright.diagnostics,
+        )
+        with manager.open("interactive-login", interactive_login=True):
+            logger.info("YouTube Studio session was saved successfully")
+        return 0
     return run(config, once=args.once, video_ids=args.video_id)
 
 

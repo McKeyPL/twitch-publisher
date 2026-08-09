@@ -4,6 +4,7 @@ param(
     [switch]$Once,
     [switch]$DryRun,
     [switch]$BrowserDebug,
+    [switch]$Login,
     [string[]]$VideoId = @(),
     [ValidateRange(1, 3600)]
     [int]$RestartDelaySeconds = 10
@@ -36,6 +37,7 @@ while ($true) {
     if ($Once) { $arguments += "--once" }
     if ($DryRun) { $arguments += "--dry-run" }
     if ($BrowserDebug) { $arguments += "--browser-debug" }
+    if ($Login) { $arguments += "--login" }
     foreach ($id in $VideoId) { $arguments += @("--video-id", $id) }
 
     & $python @arguments
