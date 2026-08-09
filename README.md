@@ -293,6 +293,91 @@ Ctrl+C is checked during long waits and uploads. If a platform accepted a form b
 the final result cannot be confirmed, the status receives `[NO_AUTO_RETRY]` and
 requires manual dashboard verification to prevent accidental duplicates.
 
+## YouTube Copyright Guard
+
+Copyright Guard is a separate manually launched process. It is not imported or
+started by `main.py`, so a Studio authentication or UI failure cannot stop the
+recording publisher. It scans at the configured two-hour interval and remediates
+videos that are blocked worldwide or unavailable in Poland (`PL`) or Germany
+(`DE`). Restrictions affecting only other countries are accepted.
+
+The supported policy is deliberately narrow:
+
+- audio claims: erase the song first, then mute the complete claimed segment if
+  the protected restriction remains after processing;
+- visual or audiovisual claims: trim the exact claimed segment when Studio offers
+  that operation;
+- strikes, takedowns, disputes, and appeals: never automated;
+- at most one edit per video while YouTube reports editing in progress.
+
+Studio edits cannot be reverted through the original Studio restore feature.
+Before trimming, the guard downloads the owned `Twitch Chat` caption track. Once
+the edit finishes it verifies the duration delta, retimes the SRT, updates the
+same caption track, and waits for `serving` before marking the video resolved.
+
+### Initial Studio login
+
+Close any previous guard process and create the dedicated Chromium profile:
+
+```powershell
+.\start-copyright-guard.ps1 -Login -BrowserDebug
+```
+
+Linux equivalent:
+
+```bash
+./start-copyright-guard.sh --login --browser-debug
+```
+
+Complete Google login, MFA, or CAPTCHA in the opened window and press Enter. The
+profile is stored in `auth/youtube_studio_profile`; its storage-state backup is
+`auth/youtube_studio_state.json`. Both are ignored by Git. Never copy either file
+to an untrusted machine.
+
+### Burn-in against known videos
+
+Run the three supplied reference videos without the final irreversible click:
+
+```powershell
+.\start-copyright-guard.ps1 -Once -DryRun -BrowserDebug `
+  -VideoId b7uH35WAR2U,Z__dHxFC0PQ,xWmvEX0oCj4
+```
+
+Expected API classification is:
+
+- `b7uH35WAR2U`: global restriction, action required;
+- `Z__dHxFC0PQ`: regional result depends on its current `allowed`/`blocked` list;
+  action is required when Poland or Germany is unavailable;
+- `xWmvEX0oCj4`: no protected restriction, no Studio action.
+
+Inspect `logs/youtube_copyright/<run-id>/<video-id>` after the dry run. It contains
+the API decision, parsed claims, screenshots, the action modal, and Playwright
+trace. Traces can contain authenticated session details and must not be attached
+to public bug reports without review.
+
+Once selectors have been verified on the server, execute one real remediation:
+
+```powershell
+.\start-copyright-guard.ps1 -Once -BrowserDebug -VideoId b7uH35WAR2U
+```
+
+Start the normal long-running two-hour process in its own console only after the
+single-video action has produced the expected Studio result:
+
+```powershell
+.\start-copyright-guard.ps1 -BrowserDebug
+```
+
+During the initial burn-in `trace_mode: always` and `headless: false` are expected.
+After the Studio selectors are confirmed, change them to `on_error` and `true` if
+unattended headless operation works with the dedicated profile. If Google expires
+the session, affected videos receive `AUTH_REQUIRED`; run `-Login` again.
+
+Only one guard instance can own `data/youtube_copyright_guard.lock`. Ctrl+C uses an
+interruptible event and does not wait for Studio processing; submitted edits are
+rechecked in a later cycle. Full architecture and state details are documented in
+[`docs/YOUTUBE_COPYRIGHT_GUARD.md`](docs/YOUTUBE_COPYRIGHT_GUARD.md).
+
 ## Manual cleanup
 
 Cleanup is never called by `main.py`. Preview or execute it manually:
@@ -366,6 +451,10 @@ The suite mocks Google and browser services, but exercises cached-token loading,
 token refresh and persistence, missing-scope/refresh-error OAuth fallback,
 `captions.insert` request/response handling, caption-only retry, per-part restart
 behavior, SRT boundary clipping, manifest reuse, and oversized-part replanning.
+It also covers global/PL/DE restriction classification, 50-ID batching, copyright
+state transitions, Studio claim parsing, guarded confirmations, single-instance
+locking, trim safety limits, caption backup, retiming, update, and final serving
+verification.
 An additional local verification was performed against a real FFmpeg executable
 using a generated Matroska source; the resulting CSV boundaries and manifest
 reuse were validated.

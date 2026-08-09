@@ -11,6 +11,16 @@ twitch-publisher/
 |   `-- browser_session.py      # storage state -> Firefox -> manual login
 |-- data/                       # runtime SQLite data, ignored by Git
 |-- logs/                       # runtime logs and traces, ignored by Git
+|-- youtube_copyright/          # standalone restriction monitor and Studio automation
+|   |-- api_client.py           # uploads inventory and 50-ID videos.list batches
+|   |-- detector.py             # worldwide/PL/DE region classification
+|   |-- state.py                # claim/action/run/caption audit tables
+|   |-- browser_session.py      # dedicated persistent Chromium profile
+|   |-- studio_parser.py        # resilient claim extraction
+|   |-- policy.py               # erase -> mute -> trim decision rules
+|   |-- studio_executor.py      # guarded irreversible confirmations
+|   |-- captions.py             # backup, retiming, captions.update
+|   `-- service.py              # independent two-hour cycle
 |-- uploaders/
 |   |-- __init__.py
 |   |-- base.py                 # UploadResult/BaseUploader contract and retry
@@ -35,8 +45,11 @@ twitch-publisher/
 |-- cleanup.py                  # separate manual dry-run-first CLI
 |-- normalize-recording-names.ps1 # safe filename cleanup with SQLite migration
 |-- main.py                     # application orchestration
+|-- copyright_guard.py          # standalone copyright CLI
 |-- start.ps1                   # manual Windows launcher and restart loop
 |-- start.sh                    # manual Linux launcher and restart loop
+|-- start-copyright-guard.ps1   # independent Windows copyright launcher
+|-- start-copyright-guard.sh    # independent Linux copyright launcher
 |-- install.sh                  # Debian/Ubuntu/RHEL/CentOS installer
 |-- requirements.txt
 |-- requirements-dev.txt
@@ -61,6 +74,10 @@ twitch-publisher/
 - `main.py` composes dependencies, retains the tracker between cycles, and
   isolates exceptions per recording/platform/part. YouTube and Rumble use
   independent split plans.
+- `youtube_copyright/` shares the OAuth token, quota ledger, and WAL database but
+  never runs inside `main.py`. It accepts worldwide and PL/DE restrictions only,
+  keeps irreversible Studio actions in an append-only audit trail, and closes the
+  browser instead of waiting for hours while YouTube processes an edit.
 - `uploaders/rumble.py` does not treat the visible second step as transfer
   completion. It waits for the `#video[]` token set after all chunks are uploaded
   and merged.
