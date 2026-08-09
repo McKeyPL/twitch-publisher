@@ -16,6 +16,8 @@ from state import StateStore
 from youtube_copyright.service import CopyrightGuardService
 from youtube_copyright.state import CopyrightStateStore
 from youtube_copyright.browser_session import StudioBrowserManager
+from youtube_copyright.diagnostics import prune_diagnostics
+from youtube_copyright.process_lock import GuardAlreadyRunning, SingleInstanceLock
 
 
 logger = logging.getLogger(__name__)
@@ -48,6 +50,9 @@ def run(
     video_ids: Sequence[str] = (),
 ) -> int:
     configure_logging(config)
+    removed = prune_diagnostics(config.youtube_copyright.diagnostics)
+    if removed:
+        logger.info("Pruned %d expired copyright diagnostic runs", len(removed))
     if not config.youtube_copyright.enabled:
         logger.info("YouTube Copyright Guard is disabled in config.yaml")
         return 0
@@ -134,15 +139,28 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     config = replace(config, youtube_copyright=copyright_config)
     if args.login:
+        copyright_config = replace(
+            copyright_config,
+            browser=replace(copyright_config.browser, headless=False),
+        )
+        config = replace(config, youtube_copyright=copyright_config)
         configure_logging(config)
         manager = StudioBrowserManager(
             config.youtube_copyright.browser,
             config.youtube_copyright.diagnostics,
         )
-        with manager.open("interactive-login", interactive_login=True):
-            logger.info("YouTube Studio session was saved successfully")
+        lock_path = config.paths.database.parent / "youtube_copyright_guard.lock"
+        with SingleInstanceLock(lock_path):
+            with manager.open("interactive-login", interactive_login=True):
+                logger.info("YouTube Studio session was saved successfully")
         return 0
-    return run(config, once=args.once, video_ids=args.video_id)
+    lock_path = config.paths.database.parent / "youtube_copyright_guard.lock"
+    try:
+        with SingleInstanceLock(lock_path):
+            return run(config, once=args.once, video_ids=args.video_id)
+    except GuardAlreadyRunning as exc:
+        print(f"[ERROR] {exc}", file=sys.stderr)
+        return 3
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -9,6 +9,8 @@ __pycache__/
 .coverage
 htmlcov/
 auth/*.json
+auth/*.lock
+auth/youtube_studio_profile/
 data/
 logs/
 playwright-report/
