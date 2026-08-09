@@ -70,6 +70,7 @@ while true; do
     wait "$CHILD_PID"
     exit_code=$?
     CHILD_PID=""
+    if ((exit_code == 130)); then exit 130; fi
     if ((exit_code == 0)); then exit 0; fi
     if $ONCE || $LOGIN; then exit "$exit_code"; fi
     ((restart_count += 1))

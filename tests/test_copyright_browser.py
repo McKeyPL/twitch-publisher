@@ -153,6 +153,21 @@ def test_refuses_unattended_login_when_session_expired(tmp_path: Path) -> None:
     playwright.stop.assert_called_once()
 
 
+def test_sigint_skips_blocking_playwright_cleanup(tmp_path: Path) -> None:
+    starter, playwright, context, page = _playwright_fixture()
+    manager = StudioBrowserManager(_browser_config(tmp_path), _diagnostics(tmp_path))
+    with patch("youtube_copyright.browser_session.sync_playwright", return_value=starter):
+        session = manager.open("run-interrupted", video_id="abc")
+        context.reset_mock()
+        playwright.stop.reset_mock()
+        session.__exit__(KeyboardInterrupt, KeyboardInterrupt(), None)
+
+    context.storage_state.assert_not_called()
+    context.tracing.stop.assert_not_called()
+    context.close.assert_not_called()
+    playwright.stop.assert_not_called()
+
+
 def test_pruning_removes_only_marked_guard_run_directories(tmp_path: Path) -> None:
     config = _diagnostics(tmp_path)
     marked = DiagnosticRun(config, "old-run").directory

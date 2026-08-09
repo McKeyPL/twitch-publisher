@@ -26,6 +26,10 @@ and the protected-region restriction remains, mute all audio in the claimed
 segment. For visual or audiovisual claims, trim the claimed segment when Studio
 offers that operation. Only one edit may be submitted for a video at a time.
 
+Studio can require one acknowledgement checkbox before the irreversible final
+button. The executor checks it only when exactly one checkbox is visible; multiple
+checkboxes are treated as an ambiguous UI and no edit is submitted.
+
 Trimming is rejected when claim ranges are ambiguous, the edit would remove more
 than 90 percent of the video, or fewer than 60 seconds would remain. The guard
 never deletes or reuploads a complete video and never submits a legal statement.
@@ -67,3 +71,8 @@ actions, and runs. Every irreversible click is tied to a run ID, video ID,
 restriction reason, selected action, claim range, screenshots, trace, timestamps,
 and final verification. WAL and short transactions allow the publisher and guard
 to run as separate processes.
+
+Ctrl+C marks an in-flight action uncertain and skips new synchronous Playwright
+cleanup calls. If the browser operation still does not unwind within five seconds,
+a watchdog forces exit code 130. Windows and Linux launchers recognize that code as
+an operator stop and do not restart the guard.

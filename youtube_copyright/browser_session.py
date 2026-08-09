@@ -74,6 +74,16 @@ class StudioBrowserSession:
         return self
 
     def __exit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
+        if exc_type is not None and issubclass(exc_type, KeyboardInterrupt):
+            # Never start another synchronous Playwright operation while one was
+            # interrupted. It can wait for the original pending locator for many
+            # minutes. The process exits immediately after persisting UNCERTAIN.
+            self._closed = True
+            logger.info(
+                "Skipping Playwright cleanup after SIGINT; the browser transport "
+                "will close with the guard process"
+            )
+            return
         self.close(success=exc_type is None)
 
 

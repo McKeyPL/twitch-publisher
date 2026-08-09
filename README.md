@@ -390,8 +390,12 @@ unattended headless operation works with the dedicated profile. If Google expire
 the session, affected videos receive `AUTH_REQUIRED`; run `-Login` again.
 
 Only one guard instance can own `data/youtube_copyright_guard.lock`. Ctrl+C uses an
-interruptible event and does not wait for Studio processing; submitted edits are
-rechecked in a later cycle. Full architecture and state details are documented in
+interruptible event and does not wait for Studio processing. An interrupted browser
+action is marked uncertain, blocking automatic retries. Playwright cleanup is
+skipped on SIGINT, and a five-second watchdog forces exit code 130 if a synchronous
+browser call does not unwind; both launchers treat 130 as a user stop and never
+restart it. Submitted edits are rechecked in a later cycle. Full architecture and
+state details are documented in
 [`docs/YOUTUBE_COPYRIGHT_GUARD.md`](docs/YOUTUBE_COPYRIGHT_GUARD.md).
 
 ## Manual cleanup

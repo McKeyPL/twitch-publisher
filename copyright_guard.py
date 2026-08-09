@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import signal
 import sys
 import threading
 from dataclasses import replace
 from pathlib import Path
-from typing import Sequence
+from typing import Callable, Sequence
 
 from config import Config, load_config
 from state import StateStore
@@ -25,6 +26,23 @@ from youtube_copyright.process_lock import GuardAlreadyRunning, SingleInstanceLo
 
 
 logger = logging.getLogger(__name__)
+_FORCED_STOP_TIMEOUT_SECONDS = 5.0
+
+
+def _force_exit_if_stuck(
+    shutdown_complete: threading.Event,
+    timeout_seconds: float = _FORCED_STOP_TIMEOUT_SECONDS,
+    exit_function: Callable[[int], None] | None = None,
+) -> None:
+    """Guarantee that an interrupted synchronous browser call cannot hang forever."""
+
+    if shutdown_complete.wait(timeout_seconds):
+        return
+    logger.critical(
+        "Copyright Guard did not stop within %.1f s after Ctrl+C; forcing exit",
+        timeout_seconds,
+    )
+    (exit_function or os._exit)(130)
 
 
 def configure_logging(config: Config) -> None:
@@ -65,52 +83,69 @@ def run(
         return 2
 
     stop_event = threading.Event()
+    shutdown_complete = threading.Event()
+    interrupt_count = 0
 
     def request_stop(signum: int, frame: object) -> None:
+        nonlocal interrupt_count
+        interrupt_count += 1
         logger.info("Received signal %s; stopping the copyright guard", signum)
         stop_event.set()
-        if signum == getattr(signal, "SIGINT", None):
-            raise KeyboardInterrupt
+        if interrupt_count >= 2:
+            logger.critical("Received a second stop signal; forcing immediate exit")
+            os._exit(130)
+        threading.Thread(
+            target=_force_exit_if_stuck,
+            args=(shutdown_complete,),
+            name="copyright-guard-stop-watchdog",
+            daemon=True,
+        ).start()
+        raise KeyboardInterrupt
 
     for signal_name in ("SIGINT", "SIGTERM"):
         if hasattr(signal, signal_name):
             signal.signal(getattr(signal, signal_name), request_stop)
 
     try:
-        with (
-            StateStore(config.paths.database) as quota_store,
-            CopyrightStateStore(config.paths.database) as copyright_store,
-        ):
-            service = CopyrightGuardService(
-                config,
-                copyright_store,
-                quota_store,
-                stop_event=stop_event,
-            )
-            while not stop_event.is_set():
-                try:
-                    result = service.run_cycle(
-                        video_ids=video_ids or None,
-                        include_channel_uploads=not video_ids,
-                    )
-                    logger.info(
-                        "Copyright cycle %s finished: checked=%d actionable=%d ignored=%d missing=%d",
-                        result.run_id,
-                        result.videos_checked,
-                        len(result.actionable_video_ids),
-                        len(result.ignored_video_ids),
-                        len(result.missing_video_ids),
-                    )
-                except Exception:
-                    logger.exception("Copyright guard cycle failed; the next cycle will retry")
+        try:
+            with (
+                StateStore(config.paths.database) as quota_store,
+                CopyrightStateStore(config.paths.database) as copyright_store,
+            ):
+                service = CopyrightGuardService(
+                    config,
+                    copyright_store,
+                    quota_store,
+                    stop_event=stop_event,
+                )
+                while not stop_event.is_set():
+                    try:
+                        result = service.run_cycle(
+                            video_ids=video_ids or None,
+                            include_channel_uploads=not video_ids,
+                        )
+                        logger.info(
+                            "Copyright cycle %s finished: checked=%d actionable=%d ignored=%d missing=%d",
+                            result.run_id,
+                            result.videos_checked,
+                            len(result.actionable_video_ids),
+                            len(result.ignored_video_ids),
+                            len(result.missing_video_ids),
+                        )
+                    except Exception:
+                        logger.exception(
+                            "Copyright guard cycle failed; the next cycle will retry"
+                        )
+                        if once:
+                            return 1
                     if once:
-                        return 1
-                if once:
-                    return 0
-                stop_event.wait(config.youtube_copyright.interval_hours * 3600)
-    except KeyboardInterrupt:
-        logger.info("Copyright Guard was interrupted by the user")
-    return 0
+                        return 0
+                    stop_event.wait(config.youtube_copyright.interval_hours * 3600)
+        except KeyboardInterrupt:
+            logger.info("Copyright Guard was interrupted by the user")
+        return 0
+    finally:
+        shutdown_complete.set()
 
 
 def build_parser() -> argparse.ArgumentParser:

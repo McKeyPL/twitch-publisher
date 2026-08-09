@@ -42,6 +42,10 @@ while ($true) {
 
     & $python @arguments
     $exitCode = $LASTEXITCODE
+    if ($exitCode -eq 130) {
+        Write-LauncherLog "copyright_guard.py was interrupted by the user; not restarting."
+        exit 130
+    }
     if ($exitCode -eq 0) {
         Write-LauncherLog "copyright_guard.py exited successfully."
         exit 0
