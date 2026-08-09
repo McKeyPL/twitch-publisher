@@ -130,60 +130,24 @@ class CopyrightGuardService:
                     )
                     continue
 
-                decision = classify_region_restriction(
-                    resource.content_details,
-                    protected_regions=self.config.youtube_copyright.protected_regions,
-                    global_blocks=self.config.youtube_copyright.global_blocks,
-                    ignore_other_regional_blocks=(
-                        self.config.youtube_copyright.ignore_other_regional_blocks
-                    ),
-                )
-                processing = resource.processing_status not in {None, "succeeded"}
-                state = VideoState.PROCESSING if processing else decision.state
-                latest_action = self.copyright_store.latest_action(video_id)
-                if (
-                    not decision.actionable
-                    and latest_action is not None
-                    and latest_action.state in {ActionState.SUBMITTED, ActionState.PROCESSING}
-                ):
-                    state = (
-                        VideoState.RESOLVED
-                        if self._finalize_resolved_action(resource, latest_action)
-                        else VideoState.CAPTIONS_PENDING
+                try:
+                    action_needed = self._record_api_resource(
+                        video_id, source_path, resource, now, next_check
                     )
-                if resource.rejection_reason in {"claim", "copyright"}:
-                    state = VideoState.MANUAL_REQUIRED
-                self.copyright_store.upsert_video(
-                    CopyrightVideo(
-                        video_id=video_id,
-                        source_video_path=source_path,
-                        title=resource.title,
-                        duration_seconds=resource.duration_seconds,
-                        state=state,
-                        restriction_kind=decision.kind,
-                        allowed_regions=decision.allowed_regions,
-                        blocked_regions=decision.blocked_regions,
-                        restriction_reasons=decision.reasons,
-                        processing=processing,
-                        last_checked_at=now,
+                    if action_needed:
+                        actionable.append(video_id)
+                    else:
+                        ignored.append(video_id)
+                except Exception as exc:
+                    logger.exception("Could not classify/finalize YouTube video %s", video_id)
+                    self.copyright_store.update_video_state(
+                        video_id,
+                        VideoState.FAILED,
+                        last_error=str(exc),
                         next_check_at=next_check,
                     )
-                )
-                checked += 1
-                if decision.actionable and not processing:
-                    actionable.append(video_id)
-                    logger.warning(
-                        "YouTube video %s requires remediation: %s",
-                        video_id,
-                        ", ".join(decision.reasons),
-                    )
-                else:
                     ignored.append(video_id)
-                    logger.info(
-                        "YouTube video %s requires no action: %s",
-                        video_id,
-                        decision.state.value,
-                    )
+                checked += 1
 
             submitted = 0
             if mode != "report":
@@ -216,6 +180,67 @@ class CopyrightGuardService:
                 error_message=str(exc),
             )
             raise
+
+    def _record_api_resource(
+        self,
+        video_id: str,
+        source_path: str | None,
+        resource: Any,
+        now: datetime,
+        next_check: datetime,
+    ) -> bool:
+        decision = classify_region_restriction(
+            resource.content_details,
+            protected_regions=self.config.youtube_copyright.protected_regions,
+            global_blocks=self.config.youtube_copyright.global_blocks,
+            ignore_other_regional_blocks=(
+                self.config.youtube_copyright.ignore_other_regional_blocks
+            ),
+        )
+        processing = resource.processing_status not in {None, "succeeded"}
+        state = VideoState.PROCESSING if processing else decision.state
+        latest_action = self.copyright_store.latest_action(video_id)
+        if (
+            not decision.actionable
+            and latest_action is not None
+            and latest_action.state in {ActionState.SUBMITTED, ActionState.PROCESSING}
+        ):
+            state = (
+                VideoState.RESOLVED
+                if self._finalize_resolved_action(resource, latest_action)
+                else VideoState.CAPTIONS_PENDING
+            )
+        if resource.rejection_reason in {"claim", "copyright"}:
+            state = VideoState.MANUAL_REQUIRED
+        self.copyright_store.upsert_video(
+            CopyrightVideo(
+                video_id=video_id,
+                source_video_path=source_path,
+                title=resource.title,
+                duration_seconds=resource.duration_seconds,
+                state=state,
+                restriction_kind=decision.kind,
+                allowed_regions=decision.allowed_regions,
+                blocked_regions=decision.blocked_regions,
+                restriction_reasons=decision.reasons,
+                processing=processing,
+                last_checked_at=now,
+                next_check_at=next_check,
+            )
+        )
+        if decision.actionable and not processing:
+            logger.warning(
+                "YouTube video %s requires remediation: %s",
+                video_id,
+                ", ".join(decision.reasons),
+            )
+            return True
+        logger.info(
+            "YouTube video %s requires no action: %s",
+            video_id,
+            decision.state.value,
+        )
+        return False
 
     def _remediate_video(self, video_id: str, run_id: str) -> bool:
         video = self.copyright_store.get_video(video_id)
