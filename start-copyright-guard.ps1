@@ -1,4 +1,4 @@
-[CmdletBinding()]
+[CmdletBinding(PositionalBinding = $false)]
 param(
     [string]$Config = "config.yaml",
     [switch]$Once,
@@ -7,7 +7,9 @@ param(
     [switch]$Login,
     [string[]]$VideoId = @(),
     [ValidateRange(1, 3600)]
-    [int]$RestartDelaySeconds = 10
+    [int]$RestartDelaySeconds = 10,
+    [Parameter(ValueFromRemainingArguments = $true)]
+    [string[]]$ForwardedArguments = @()
 )
 
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
@@ -23,6 +25,11 @@ $logsDirectory = Join-Path $PSScriptRoot "logs"
 New-Item -ItemType Directory -Path $logsDirectory -Force | Out-Null
 $launcherLog = Join-Path $logsDirectory "start_copyright_guard_ps1.log"
 $restartCount = 0
+$forwardedConfig = @($ForwardedArguments | Where-Object {
+    $_ -eq "--config" -or $_ -like "--config=*"
+}).Count -gt 0
+$forwardedOnce = $ForwardedArguments -contains "--once"
+$forwardedLogin = $ForwardedArguments -contains "--login"
 
 function Write-LauncherLog {
     param([Parameter(Mandatory = $true)][string]$Message)
@@ -33,12 +40,14 @@ function Write-LauncherLog {
 
 while ($true) {
     Write-LauncherLog "Starting copyright_guard.py (restart number $restartCount)."
-    $arguments = @("copyright_guard.py", "--config", $Config)
+    $arguments = @("copyright_guard.py")
+    if (-not $forwardedConfig) { $arguments += @("--config", $Config) }
     if ($Once) { $arguments += "--once" }
     if ($DryRun) { $arguments += "--dry-run" }
     if ($BrowserDebug) { $arguments += "--browser-debug" }
     if ($Login) { $arguments += "--login" }
     foreach ($id in $VideoId) { $arguments += @("--video-id", $id) }
+    $arguments += $ForwardedArguments
 
     & $python @arguments
     $exitCode = $LASTEXITCODE
@@ -50,7 +59,7 @@ while ($true) {
         Write-LauncherLog "copyright_guard.py exited successfully."
         exit 0
     }
-    if ($Once -or $Login) {
+    if ($Once -or $Login -or $forwardedOnce -or $forwardedLogin) {
         Write-LauncherLog "copyright_guard.py exited with code $exitCode; one-shot mode will not restart."
         exit $exitCode
     }

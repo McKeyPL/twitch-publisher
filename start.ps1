@@ -1,10 +1,12 @@
-[CmdletBinding()]
+[CmdletBinding(PositionalBinding = $false)]
 param(
     [string]$Config = "config.yaml",
     [switch]$Once,
     [switch]$BrowserDebug,
     [ValidateRange(1, 3600)]
-    [int]$RestartDelaySeconds = 10
+    [int]$RestartDelaySeconds = 10,
+    [Parameter(ValueFromRemainingArguments = $true)]
+    [string[]]$ForwardedArguments = @()
 )
 
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
@@ -33,6 +35,10 @@ $logsDirectory = Join-Path $PSScriptRoot "logs"
 New-Item -ItemType Directory -Path $logsDirectory -Force | Out-Null
 $launcherLog = Join-Path $logsDirectory "start_ps1.log"
 $restartCount = 0
+$forwardedConfig = @($ForwardedArguments | Where-Object {
+    $_ -eq "--config" -or $_ -like "--config=*"
+}).Count -gt 0
+$forwardedOnce = $ForwardedArguments -contains "--once"
 
 function Write-LauncherLog {
     param([Parameter(Mandatory = $true)][string]$Message)
@@ -43,13 +49,17 @@ function Write-LauncherLog {
 
 while ($true) {
     Write-LauncherLog "Starting main.py (restart number $restartCount)."
-    $pythonArguments = @("main.py", "--config", $Config)
+    $pythonArguments = @("main.py")
+    if (-not $forwardedConfig) {
+        $pythonArguments += @("--config", $Config)
+    }
     if ($Once) {
         $pythonArguments += "--once"
     }
     if ($BrowserDebug) {
         $pythonArguments += "--browser-debug"
     }
+    $pythonArguments += $ForwardedArguments
 
     & python @pythonArguments
     $pythonExitCode = $LASTEXITCODE
@@ -59,7 +69,7 @@ while ($true) {
         exit 0
     }
 
-    if ($Once) {
+    if ($Once -or $forwardedOnce) {
         Write-LauncherLog "main.py exited with code $pythonExitCode; Once mode will not restart."
         exit $pythonExitCode
     }
