@@ -20,20 +20,14 @@ _ACTION_ALIASES: dict[RemediationAction, tuple[str, ...]] = {
     RemediationAction.ERASE_SONG: (
         "erase song",
         "remove song",
-        "usuń utwór",
-        "wymaż utwór",
     ),
     RemediationAction.MUTE_ALL: (
         "mute all sound",
         "mute all audio",
-        "wycisz cały dźwięk",
-        "wycisz cały dzwiek",
     ),
     RemediationAction.TRIM: (
         "trim out segment",
         "trim segment",
-        "wytnij fragment",
-        "przytnij fragment",
     ),
 }
 
@@ -101,7 +95,7 @@ def _normalize_text(value: str) -> str:
 
 
 def _first_meaningful_line(text: str) -> str | None:
-    ignored = {"content used", "treść wykorzystana", "tresc wykorzystana"}
+    ignored = {"content used"}
     for line in text.splitlines():
         if line.lower() not in ignored and not _TIME_RANGE.fullmatch(line):
             return line[:500]
@@ -109,15 +103,15 @@ def _first_meaningful_line(text: str) -> str | None:
 
 
 def _claim_type(text: str) -> ClaimType:
-    if any(value in text for value in ("copyright strike", "takedown", "ostrzeżenie")):
+    if any(value in text for value in ("copyright strike", "takedown")):
         return ClaimType.STRIKE
     audio = any(
         value in text
-        for value in ("song", "music", "audio", "sound recording", "utwór", "muzyka", "dźwięk")
+        for value in ("song", "music", "audio", "sound recording")
     )
     visual = any(
         value in text
-        for value in ("visual", "audiovisual", "video segment", "obraz", "fragment filmu")
+        for value in ("visual", "audiovisual", "video segment")
     )
     if audio and visual:
         return ClaimType.AUDIOVISUAL
@@ -164,7 +158,7 @@ _CLAIM_EXTRACTION_SCRIPT = r"""
   }
   if (!elements.length) {
     const buttons = Array.from(document.querySelectorAll('button')).filter((button) =>
-      /take action|select action|actions|podejmij działanie|wybierz działanie|działania/i.test(
+      /take action|select action|actions/i.test(
         button.innerText || button.getAttribute('aria-label') || ''
       )
     );
@@ -176,7 +170,7 @@ _CLAIM_EXTRACTION_SCRIPT = r"""
   }
   const allActionButtons = Array.from(document.querySelectorAll('button')).filter((button) =>
     visible(button) &&
-    /take action|select action|actions|podejmij działanie|wybierz działanie|działania/i.test(
+    /take action|select action|actions/i.test(
       button.innerText || button.getAttribute('aria-label') || ''
     )
   );
@@ -188,7 +182,7 @@ _CLAIM_EXTRACTION_SCRIPT = r"""
       .join('\n'),
     actionIndex: (() => {
       const button = Array.from(element.querySelectorAll('button')).find((candidate) =>
-        /take action|select action|actions|podejmij działanie|wybierz działanie|działania/i.test(
+        /take action|select action|actions/i.test(
           candidate.innerText || candidate.getAttribute('aria-label') || ''
         )
       );

@@ -136,13 +136,24 @@ def run(
                             include_channel_uploads=not video_ids,
                         )
                         logger.info(
-                            "Copyright cycle %s finished: checked=%d actionable=%d ignored=%d missing=%d",
+                            "Copyright cycle %s finished: checked=%d actionable=%d "
+                            "submitted=%d ignored=%d missing=%d",
                             result.run_id,
                             result.videos_checked,
                             len(result.actionable_video_ids),
+                            result.actions_submitted,
                             len(result.ignored_video_ids),
                             len(result.missing_video_ids),
                         )
+                        if (
+                            config.youtube_copyright.mode == "automatic"
+                            and result.actionable_video_ids
+                            and result.actions_submitted == 0
+                        ):
+                            logger.warning(
+                                "The cycle found actionable restrictions but submitted "
+                                "no Studio edits; inspect per-video errors and diagnostics"
+                            )
                     except Exception:
                         logger.exception(
                             "Copyright guard cycle failed; the next cycle will retry"

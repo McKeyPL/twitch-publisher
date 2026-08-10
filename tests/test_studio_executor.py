@@ -174,6 +174,7 @@ def test_inspection_extracts_claims_and_processing_state(tmp_path: Path) -> None
     assert inspection.processing
     assert len(inspection.claims) == 1
     assert inspection.claims[0].claim.start_seconds == 10
+    assert page.url.endswith("/video/video123/claims?hl=en")
     assert page.events[:4] == [
         "expect_response_enter",
         "goto",
@@ -183,9 +184,12 @@ def test_inspection_extracts_claims_and_processing_state(tmp_path: Path) -> None
     assert "wait_for_claim_ui" in page.events
 
 
-def test_inspection_recognizes_new_polish_processing_screen(tmp_path: Path) -> None:
+def test_inspection_recognizes_english_processing_screen(tmp_path: Path) -> None:
     page = FakePage(tmp_path, {})
-    page.body_text = "Edytuję film… Ten proces może chwilę potrwać. Wciąż przetwarzam"
+    page.body_text = (
+        "Video editing is in progress... This process might take a while. "
+        "Still processing"
+    )
 
     inspection = StudioCopyrightExecutor(page, _diagnostic(tmp_path)).inspect(
         "video123"
@@ -231,14 +235,14 @@ def test_dry_run_opens_audio_action_but_does_not_confirm(tmp_path: Path) -> None
     assert page.keyboard.pressed == ["Escape"]
 
 
-def test_dry_run_accepts_polish_new_ui_actions_button(tmp_path: Path) -> None:
+def test_dry_run_accepts_english_claims_ui_actions_button(tmp_path: Path) -> None:
     page = FakePage(
         tmp_path,
-        {"button": ["Działania"], "menuitem": ["Usuń utwór"]},
+        {"button": ["Take action"], "menuitem": ["Erase song"]},
     )
     parsed = StudioClaimParser().parse_rows(
         "video123",
-        [{"text": "Utwór\nDźwięk\n00:10 - 00:20", "actions": ""}],
+        [{"text": "Song\nAudio\n00:10 - 00:20", "actions": ""}],
     )[0]
     result = StudioCopyrightExecutor(page, _diagnostic(tmp_path)).execute(
         "video123",

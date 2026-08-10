@@ -104,7 +104,7 @@ def test_trim_ranges_are_merged_and_guarded() -> None:
         )
 
 
-def test_parser_extracts_audio_visual_polish_and_strike_claims() -> None:
+def test_parser_extracts_english_audio_visual_and_strike_claims() -> None:
     parsed = StudioClaimParser().parse_rows(
         "video",
         [
@@ -113,8 +113,8 @@ def test_parser_extracts_audio_visual_polish_and_strike_claims() -> None:
                 "actions": "Erase song\nMute all sound in claimed segment",
             },
             {
-                "text": "Fragment filmu\nObraz\n1:02:03 – 1:03:04",
-                "actions": "Wytnij fragment",
+                "text": "Claimed video segment\nVisual\n1:02:03 – 1:03:04",
+                "actions": "Trim out segment",
             },
             {"text": "Copyright strike\nTakedown", "actions": "Appeal"},
         ],

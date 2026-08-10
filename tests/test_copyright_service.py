@@ -330,3 +330,25 @@ def test_claim_selection_does_not_edit_ambiguous_monetization_claims() -> None:
         ],
     )
     assert _select_claim(blocked).claim.content_title == "Song B"
+
+
+def test_claim_selection_recognizes_current_english_blocking_phrases() -> None:
+    claims = StudioClaimParser().parse_rows(
+        "video",
+        [
+            {
+                "text": "Song A\nAudio\nNo impact to your video.",
+                "actions": "Take action",
+            },
+            {
+                "text": "Song B\nAudio\nBlocking the video in some territories.",
+                "actions": "Take action",
+            },
+            {
+                "text": "Song C\nAudio\nBlocking the video globally.",
+                "actions": "Take action",
+            },
+        ],
+    )
+
+    assert _select_claim(claims).claim.content_title == "Song C"

@@ -568,28 +568,37 @@ class CopyrightGuardService:
 
 def _select_claim(claims: Iterable[Any]) -> Any:
     claim_list = list(claims)
-    priority_words = (
+    global_block_markers = (
+        "blocking the video globally",
+        "video blocked globally",
+        "blocked globally",
         "blocked worldwide",
+        "blocking worldwide",
+    )
+    protected_region_markers = (
         "blocked in poland",
         "blocked in germany",
-        "zablokowany na całym świecie",
-        "polska",
-        "niemcy",
+        "blocking the video in poland",
+        "blocking the video in germany",
     )
-    specific = [
-        parsed
-        for parsed in claim_list
-        if any(word in parsed.raw_text.lower() for word in priority_words)
-    ]
-    if specific:
-        return specific[0]
-    generally_blocking = [
-        parsed
-        for parsed in claim_list
-        if any(word in parsed.raw_text.lower() for word in ("blocked", "zablokowan"))
-    ]
-    if generally_blocking:
-        return generally_blocking[0]
+    regional_block_markers = (
+        "blocking the video in some territories",
+        "blocked in some territories",
+        "blocking in some territories",
+    )
+    for markers in (
+        global_block_markers,
+        protected_region_markers,
+        regional_block_markers,
+        ("blocked", "blocking"),
+    ):
+        matching = [
+            parsed
+            for parsed in claim_list
+            if any(marker in parsed.raw_text.lower() for marker in markers)
+        ]
+        if matching:
+            return matching[0]
     if len(claim_list) == 1:
         # API already established that this video is blocked in a protected
         # region, so a sole Content ID claim is the only possible source.

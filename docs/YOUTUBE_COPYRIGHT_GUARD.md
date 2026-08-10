@@ -43,6 +43,11 @@ been restored. Blocking in any other remaining country does not prevent RESOLVED
 
 ## Browser and diagnostics
 
+Studio automation deliberately uses the English UI only. Every claims-page URL
+requests `hl=en`, and selectors and processing markers are maintained against
+English labels. Keep the dedicated Studio profile language set to English; this
+avoids ambiguous translations changing independently of the automation.
+
 YouTube Studio uses a dedicated browser profile and storage state under `auth/`.
 Google may reject sign-in when a browser is controlled by automation. Therefore
 `--login` starts a regular installed Chrome or Edge process without Playwright or

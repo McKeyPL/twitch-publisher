@@ -352,6 +352,9 @@ only when auto-detection fails, point the variable to `msedge.exe`.
 
 ### Burn-in against known videos
 
+Copyright Guard targets the English YouTube Studio interface. Keep the dedicated
+Studio browser profile language set to English; claims URLs also enforce `hl=en`.
+
 Run the three supplied reference videos without the final irreversible click:
 
 ```powershell

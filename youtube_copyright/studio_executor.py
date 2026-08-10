@@ -16,28 +16,20 @@ from .studio_parser import ParsedStudioClaim, StudioClaimParser
 logger = logging.getLogger(__name__)
 
 _ALIASES = {
-    "see_details": ("see details", "review issues", "zobacz szczegóły", "sprawdź problemy"),
-    "take_action": (
-        "take action",
-        "select action",
-        "actions",
-        "podejmij działanie",
-        "wybierz działanie",
-        "działania",
-    ),
-    "erase_song": ("erase song", "remove song", "usuń utwór", "wymaż utwór"),
+    "see_details": ("view details", "see details", "review issues"),
+    "take_action": ("take action", "select action", "actions"),
+    "erase_song": ("erase song", "remove song"),
     "mute_all": (
         "mute all sound in the claimed segment",
         "mute all sound in claimed segments",
         "mute all audio",
-        "wycisz cały dźwięk",
     ),
-    "trim": ("trim out segment", "trim segment", "wytnij fragment", "przytnij fragment"),
-    "continue": ("continue", "dalej", "kontynuuj"),
-    "save": ("save", "zapisz"),
-    "confirm_changes": ("confirm changes", "potwierdź zmiany"),
-    "confirm_mute": ("mute", "wycisz"),
-    "confirm_trim": ("trim", "przytnij", "wytnij"),
+    "trim": ("trim out segment", "trim segment"),
+    "continue": ("continue",),
+    "save": ("save",),
+    "confirm_changes": ("confirm changes",),
+    "confirm_mute": ("mute",),
+    "confirm_trim": ("trim",),
 }
 
 _PROCESSING_MARKERS = (
@@ -45,17 +37,11 @@ _PROCESSING_MARKERS = (
     "editing video",
     "still processing",
     "processing your edits",
-    "edytuję film",
-    "edytuje film",
-    "wciąż przetwarzam",
-    "wciaz przetwarzam",
-    "trwa edytowanie filmu",
-    "przetwarzanie zmian",
 )
 _SUBMITTED_MARKERS = _PROCESSING_MARKERS + (
     "edit submitted",
     "changes are being processed",
-    "zmiany są przetwarzane",
+    "changes saved",
 )
 
 _CLAIM_UI_READY_SCRIPT = r"""
@@ -67,7 +53,7 @@ _CLAIM_UI_READY_SCRIPT = r"""
   );
   if (rows) return true;
   const text = (document.body && document.body.innerText || '').toLowerCase();
-  return /video editing is in progress|editing video|still processing|processing your edits|edytuję film|edytuje film|wciąż przetwarzam|wciaz przetwarzam|trwa edytowanie filmu|przetwarzanie zmian/.test(text);
+  return /video editing is in progress|editing video|still processing|processing your edits/.test(text);
 }
 """
 
@@ -106,7 +92,9 @@ class StudioCopyrightExecutor:
         self.parser = StudioClaimParser()
 
     def inspect(self, video_id: str) -> StudioInspection:
-        url = f"https://studio.youtube.com/video/{video_id}/copyright?hl=en"
+        # Studio automation intentionally targets one stable UI language. Account
+        # language may vary, therefore every entry URL explicitly requests English.
+        url = f"https://studio.youtube.com/video/{video_id}/claims?hl=en"
         claim_data_error: Exception | None = None
         claim_data_status: int | None = None
         try:
@@ -149,6 +137,15 @@ class StudioCopyrightExecutor:
                 "url": self.page.url.split("?", 1)[0],
                 "processing": processing,
                 "claims": [item.claim for item in claims],
+                "claim_rows": [
+                    {
+                        "dom_index": item.dom_index,
+                        "raw_text": item.raw_text,
+                        "claim": item.claim,
+                    }
+                    for item in claims
+                ],
+                "studio_language": "en",
                 "claim_data_status": claim_data_status,
                 "claim_data_error": str(claim_data_error) if claim_data_error else None,
                 "body_excerpt": body_excerpt,
