@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from collections.abc import Iterable, Iterator
 from pathlib import Path
 
@@ -36,15 +37,33 @@ def iter_candidate_recordings(
         if name.strip()
     }
     excluded_names.add(uploaded_name)
-    candidates = (
-        path
-        for path in root.rglob("*")
-        if path.is_file()
-        and path.suffix.casefold() == ".mkv"
-        and excluded_names.isdisjoint(
-            part.casefold() for part in path.relative_to(root).parts[:-1]
+    candidates: list[Path] = []
+
+    def report_walk_error(exc: OSError) -> None:
+        logger.warning("Cannot scan recording directory: %s", exc)
+
+    for directory, directory_names, file_names in os.walk(
+        root,
+        topdown=True,
+        onerror=report_walk_error,
+    ):
+        # Pruning top-down is important: an _uploaded archive can contain many
+        # terabytes and must never be traversed merely to discard its files later.
+        directory_names[:] = sorted(
+            (
+                name
+                for name in directory_names
+                if name.casefold() not in excluded_names
+            ),
+            key=str.casefold,
         )
-    )
+        current_directory = Path(directory)
+        candidates.extend(
+            current_directory / name
+            for name in file_names
+            if Path(name).suffix.casefold() == ".mkv"
+        )
+
     yield from sorted(candidates, key=lambda path: str(path).casefold())
 
 

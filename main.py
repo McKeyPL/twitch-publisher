@@ -927,12 +927,21 @@ def run_cycle(
     now: float | None = None,
     duration_probe: DurationProbe | None = None,
 ) -> list[ReadinessResult]:
+    logger.info("Starting recording scan: %s", config.paths.recordings_root)
     results = scan_cycle(
         config.paths.recordings_root,
         tracker,
         config.moving.uploaded_directory_name,
         excluded_directory_names=[config.splitting.work_directory_name],
         now=now,
+    )
+    ready_count = sum(
+        result.status is ReadinessStatus.READY for result in results
+    )
+    logger.info(
+        "Recording scan finished: candidates=%d, ready=%d",
+        len(results),
+        ready_count,
     )
     process_readiness_results(
         results, config, state_store, uploaders, duration_probe=duration_probe
@@ -942,6 +951,23 @@ def run_cycle(
 
 def run(config: Config, *, once: bool = False) -> int:
     configure_logging(config)
+    enabled_platforms = [
+        name
+        for name in ("youtube", "cda", "rumble")
+        if getattr(config.platforms, name).enabled
+    ]
+    logger.info(
+        "Publisher started: recordings_root=%s, platforms=%s, once=%s",
+        config.paths.recordings_root,
+        ",".join(enabled_platforms) or "none",
+        once,
+    )
+    if not config.paths.recordings_root.is_dir():
+        logger.error(
+            "Recordings root does not exist or is not a directory: %s. "
+            "Check RECORDINGS_ROOT in .env or paths.recordings_root in config.yaml.",
+            config.paths.recordings_root,
+        )
     stop_event = threading.Event()
 
     for signal_name in ("SIGINT", "SIGTERM"):
@@ -951,7 +977,9 @@ def run(config: Config, *, once: bool = False) -> int:
                 lambda signum, frame: _request_stop(stop_event, signum, frame),
             )
 
+    logger.info("Opening publisher state database: %s", config.paths.database)
     with StateStore(config.paths.database) as store:
+        logger.info("Publisher state database is ready")
         uploaders = build_uploaders(config, store, stop_event)
         tracker = FileSizeStabilityTracker(config.watcher.size_stability_seconds)
         try:
