@@ -72,6 +72,12 @@ def run(
     video_ids: Sequence[str] = (),
 ) -> int:
     configure_logging(config)
+    logger.info(
+        "Copyright Guard started independently: mode=%s, once=%s, explicit_videos=%d",
+        config.youtube_copyright.mode,
+        once,
+        len(video_ids),
+    )
     removed = prune_diagnostics(config.youtube_copyright.diagnostics)
     if removed:
         logger.info("Pruned %d expired copyright diagnostic runs", len(removed))
@@ -108,10 +114,15 @@ def run(
 
     try:
         try:
+            logger.info(
+                "Opening Copyright Guard state and publisher quota database: %s",
+                config.paths.database,
+            )
             with (
                 StateStore(config.paths.database) as quota_store,
                 CopyrightStateStore(config.paths.database) as copyright_store,
             ):
+                logger.info("Copyright Guard state databases are ready")
                 service = CopyrightGuardService(
                     config,
                     copyright_store,
