@@ -17,13 +17,21 @@ from youtube_copyright.studio_parser import StudioClaimParser, _CLAIM_EXTRACTION
 
 
 class FakeElement:
-    def __init__(self, label: str, on_click=None) -> None:
+    def __init__(
+        self,
+        label: str,
+        on_click=None,
+        *,
+        aria_checked: str | None = None,
+    ) -> None:
         self.label = label
         self.clicks = 0
         self.checked = False
+        self.check_calls = 0
         self.on_click = on_click
+        self.aria_checked = aria_checked
 
-    def click(self) -> None:
+    def click(self, **kwargs: object) -> None:
         self.clicks += 1
         if self.on_click is not None:
             self.on_click()
@@ -34,11 +42,26 @@ class FakeElement:
     def is_checked(self) -> bool:
         return self.checked
 
-    def check(self) -> None:
+    def check(self, **kwargs: object) -> None:
+        self.check_calls += 1
         self.checked = True
 
     def evaluate(self, script: str) -> str:
+        if "element.click()" in script:
+            self.click()
+            self.checked = True
+            self.aria_checked = "true"
+            return ""
         return f"<{self.label}>"
+
+    def get_attribute(self, name: str) -> str | None:
+        if name == "aria-checked":
+            return self.aria_checked
+        if name == "aria-disabled":
+            return "false"
+        if name == "aria-label":
+            return self.label
+        return None
 
 
 class FakeLocatorList:
@@ -102,7 +125,14 @@ class FakePage:
         self.tmp_path = tmp_path
         self.url = "https://studio.youtube.com/video/video123/copyright?hl=en"
         self.roles = {
-            role: [FakeElement(label) for label in labels] for role, labels in roles.items()
+            role: [
+                FakeElement(
+                    label,
+                    aria_checked="false" if role == "checkbox" else None,
+                )
+                for label in labels
+            ]
+            for role, labels in roles.items()
         }
         self.keyboard = FakeKeyboard()
         self.rows: list[dict[str, str]] = []
@@ -302,6 +332,7 @@ def test_automatic_erase_accepts_permanent_edit_checkbox(tmp_path: Path) -> None
     assert result.submitted
     assert page.roles["button"][1].clicks == 1
     assert page.roles["checkbox"][0].checked
+    assert page.roles["checkbox"][0].check_calls == 0
     assert page.roles["button"][2].clicks == 1
 
 
@@ -316,7 +347,10 @@ def test_current_erase_flow_saves_before_permanent_edit_confirmation(
         },
     )
     take_action, continue_button = page.roles["button"]
-    checkbox = FakeElement("I understand this edit is permanent")
+    checkbox = FakeElement(
+        "I acknowledge that these changes are permanent",
+        aria_checked="false",
+    )
     confirm_changes = FakeElement("Confirm changes")
 
     def show_permanent_edit_dialog() -> None:
@@ -342,6 +376,8 @@ def test_current_erase_flow_saves_before_permanent_edit_confirmation(
     assert continue_button.clicks == 1
     assert save_button.clicks == 1
     assert checkbox.checked
+    assert checkbox.aria_checked == "true"
+    assert checkbox.check_calls == 0
     assert confirm_changes.clicks == 1
 
 

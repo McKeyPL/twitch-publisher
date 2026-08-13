@@ -260,7 +260,12 @@ class StudioCopyrightExecutor:
                 "Expected one permanent-edit confirmation button, "
                 f"got {len(confirm_buttons)}"
             )
-        confirm_buttons[0].click()
+        confirm_button = confirm_buttons[0]
+        if confirm_button.get_attribute("aria-disabled") == "true":
+            raise StudioAutomationUnavailable(
+                "Confirm changes remained disabled after accepting the acknowledgement"
+            )
+        confirm_button.click(timeout=10_000)
 
     def _click_final_confirmation(
         self,
@@ -300,9 +305,48 @@ class StudioCopyrightExecutor:
         if not visible:
             return False
         checkbox = visible[0]
-        if not checkbox.is_checked():
-            checkbox.check()
-            self.page.wait_for_timeout(250)
+        aria_disabled = checkbox.get_attribute("aria-disabled")
+        aria_checked_before = checkbox.get_attribute("aria-checked")
+        if aria_disabled == "true":
+            raise StudioAutomationUnavailable(
+                "The permanent-edit acknowledgement checkbox is disabled"
+            )
+
+        if aria_checked_before is not None:
+            # YouTube uses a custom div[role=checkbox]. Locator.check() is only
+            # appropriate for native inputs and waits for ten minutes here because
+            # #checkbox-container intercepts pointer events. A DOM click invokes
+            # the component's own handler without bypassing its state transition.
+            if aria_checked_before != "true":
+                checkbox.evaluate("element => element.click()")
+                for _ in range(25):
+                    if checkbox.get_attribute("aria-checked") == "true":
+                        break
+                    self.page.wait_for_timeout(200)
+                else:
+                    self.diagnostic.screenshot(
+                        self.page, "permanent_edit_acknowledgement_failed"
+                    )
+                    raise StudioAutomationUnavailable(
+                        "The permanent-edit acknowledgement did not become checked"
+                    )
+        elif not checkbox.is_checked():
+            # Retain bounded compatibility with a native input checkbox.
+            checkbox.check(timeout=5_000)
+
+        aria_checked_after = checkbox.get_attribute("aria-checked")
+        self.diagnostic.write_json(
+            "permanent_edit_acknowledgement",
+            {
+                "aria_label": checkbox.get_attribute("aria-label"),
+                "aria_checked_before": aria_checked_before,
+                "aria_checked_after": aria_checked_after,
+                "native_checked": (
+                    checkbox.is_checked() if aria_checked_after is None else None
+                ),
+            },
+        )
+        logger.info("Accepted YouTube Studio permanent-edit acknowledgement")
         self.diagnostic.screenshot(self.page, "permanent_edit_acknowledged")
         return True
 
