@@ -417,6 +417,21 @@ only its `UNCERTAIN` history without editing SQLite directly:
 The reset is a one-shot command. It preserves the audit history as `CANCELLED` and
 does not alter successful, processing, or ordinarily failed actions.
 
+To scan every upload exposed by the authorized YouTube channel while ignoring
+stale publisher records and local recording paths, use channel-only mode:
+
+```powershell
+.\start-copyright-guard.ps1 -ChannelOnly
+```
+
+```bash
+./start-copyright-guard.sh --channel-only
+```
+
+The videos and recordings do not have to exist locally. The guard still retains
+its small SQLite action audit because stateless irreversible edits could be
+repeated after a restart.
+
 ## Manual cleanup
 
 Cleanup is never called by `main.py`. Preview or execute it manually:

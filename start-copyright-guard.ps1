@@ -5,6 +5,7 @@ param(
     [switch]$DryRun,
     [switch]$BrowserDebug,
     [switch]$Login,
+    [switch]$ChannelOnly,
     [string[]]$VideoId = @(),
     [string[]]$ResetVideo = @(),
     [ValidateRange(1, 3600)]
@@ -50,6 +51,7 @@ while ($true) {
     if ($DryRun) { $arguments += "--dry-run" }
     if ($BrowserDebug) { $arguments += "--browser-debug" }
     if ($Login) { $arguments += "--login" }
+    if ($ChannelOnly) { $arguments += "--channel-only" }
     foreach ($id in $VideoId) { $arguments += @("--video-id", $id) }
     foreach ($id in $ResetVideo) { $arguments += @("--reset-video", $id) }
     $arguments += $ForwardedArguments

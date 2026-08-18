@@ -70,6 +70,7 @@ def run(
     *,
     once: bool = False,
     video_ids: Sequence[str] = (),
+    channel_only: bool = False,
 ) -> int:
     configure_logging(config)
     logger.info(
@@ -134,6 +135,7 @@ def run(
                         result = service.run_cycle(
                             video_ids=video_ids or None,
                             include_channel_uploads=not video_ids,
+                            include_publisher_videos=not channel_only,
                         )
                         logger.info(
                             "Copyright cycle %s finished: checked=%d actionable=%d "
@@ -183,6 +185,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--config", type=Path, default=Path("config.yaml"))
     parser.add_argument("--once", action="store_true")
     parser.add_argument("--video-id", action="append", default=[])
+    parser.add_argument(
+        "--channel-only",
+        action="store_true",
+        help=(
+            "Discover every upload directly from the authorized YouTube channel "
+            "and ignore publisher upload records"
+        ),
+    )
     parser.add_argument(
         "--reset-video",
         action="append",
@@ -274,7 +284,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     try:
         with SingleInstanceLock(lock_path):
-            return run(config, once=args.once, video_ids=args.video_id)
+            return run(
+                config,
+                once=args.once,
+                video_ids=args.video_id,
+                channel_only=args.channel_only,
+            )
     except GuardAlreadyRunning as exc:
         print(f"[ERROR] {exc}", file=sys.stderr)
         return 3

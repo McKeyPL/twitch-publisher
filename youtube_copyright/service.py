@@ -84,6 +84,7 @@ class CopyrightGuardService:
         *,
         video_ids: Iterable[str] | None = None,
         include_channel_uploads: bool = True,
+        include_publisher_videos: bool = True,
     ) -> CycleResult:
         run_id = uuid.uuid4().hex
         mode = self.config.youtube_copyright.mode
@@ -93,13 +94,32 @@ class CopyrightGuardService:
         ignored: list[str] = []
         missing: list[str] = []
         try:
-            candidates: dict[str, str | None] = self.copyright_store.publisher_video_ids()
+            candidates: dict[str, str | None] = (
+                self.copyright_store.publisher_video_ids()
+                if include_publisher_videos
+                else {}
+            )
+            publisher_count = len(candidates)
             if video_ids is not None:
                 candidates.update({value.strip(): None for value in video_ids if value.strip()})
+            explicit_count = len(candidates) - publisher_count
+            channel_count = 0
             if include_channel_uploads and video_ids is None:
+                channel_video_ids = self.api.list_uploaded_video_ids()
+                channel_count = len(channel_video_ids)
                 candidates.update(
-                    {video_id: candidates.get(video_id) for video_id in self.api.list_uploaded_video_ids()}
+                    {
+                        video_id: candidates.get(video_id)
+                        for video_id in channel_video_ids
+                    }
                 )
+            logger.info(
+                "Copyright inventory: publisher=%d explicit=%d channel=%d unique=%d",
+                publisher_count,
+                explicit_count,
+                channel_count,
+                len(candidates),
+            )
 
             for video_id, source_path in candidates.items():
                 if self.copyright_store.get_video(video_id) is None:

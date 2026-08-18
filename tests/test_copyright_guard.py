@@ -30,3 +30,7 @@ def test_retry_reset_video_option_is_repeatable() -> None:
     )
 
     assert args.reset_video == ["first", "second"]
+
+
+def test_channel_only_option_is_explicit() -> None:
+    assert build_parser().parse_args(["--channel-only"]).channel_only

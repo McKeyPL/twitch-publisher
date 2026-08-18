@@ -7,6 +7,7 @@ ONCE=false
 DRY_RUN=false
 BROWSER_DEBUG=false
 LOGIN=false
+CHANNEL_ONLY=false
 RESTART_DELAY=10
 VIDEO_IDS=()
 RESET_VIDEO_IDS=()
@@ -20,6 +21,7 @@ Usage: ./start-copyright-guard.sh [options]
   --dry-run
   --browser-debug
   --login
+  --channel-only            Ignore local publisher records; scan channel uploads
   --video-id ID             May be repeated
   --reset-video ID           Cancel UNCERTAIN actions; may be repeated
   --restart-delay SECONDS
@@ -33,6 +35,7 @@ while (($#)); do
         --dry-run) DRY_RUN=true; shift ;;
         --browser-debug) BROWSER_DEBUG=true; shift ;;
         --login) LOGIN=true; shift ;;
+        --channel-only) CHANNEL_ONLY=true; shift ;;
         --video-id) VIDEO_IDS+=("$2"); shift 2 ;;
         --reset-video) RESET_VIDEO_IDS+=("$2"); shift 2 ;;
         --restart-delay) RESTART_DELAY="$2"; shift 2 ;;
@@ -66,6 +69,7 @@ while true; do
     $DRY_RUN && args+=(--dry-run)
     $BROWSER_DEBUG && args+=(--browser-debug)
     $LOGIN && args+=(--login)
+    $CHANNEL_ONLY && args+=(--channel-only)
     for id in "${VIDEO_IDS[@]}"; do args+=(--video-id "$id"); done
     for id in "${RESET_VIDEO_IDS[@]}"; do args+=(--reset-video "$id"); done
 

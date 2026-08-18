@@ -114,6 +114,39 @@ def test_missing_video_is_recorded_without_crashing_other_items(tmp_path: Path) 
         assert copyright_store.get_video("missing").state is VideoState.FAILED
 
 
+def test_channel_only_inventory_ignores_stale_publisher_video_ids(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    service_api = _service_for([_resource("channel-video", None)])
+    with (
+        StateStore(config.paths.database) as quota_store,
+        CopyrightStateStore(config.paths.database) as copyright_store,
+    ):
+        guard = CopyrightGuardService(
+            config,
+            copyright_store,
+            quota_store,
+            api_service=service_api,
+        )
+        guard.api.list_uploaded_video_ids = MagicMock(
+            return_value=["channel-video"]
+        )
+        copyright_store.publisher_video_ids = MagicMock(
+            return_value={"stale-local-video": r"E:\old.mkv"}
+        )
+
+        result = guard.run_cycle(
+            include_channel_uploads=True,
+            include_publisher_videos=False,
+        )
+
+        assert result.videos_checked == 1
+        assert result.missing_video_ids == ()
+        assert result.ignored_video_ids == ("channel-video",)
+        copyright_store.publisher_video_ids.assert_not_called()
+
+
 def test_automatic_cycle_submits_one_studio_action(tmp_path: Path) -> None:
     config = _config(tmp_path)
     from dataclasses import replace
