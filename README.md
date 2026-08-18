@@ -387,10 +387,12 @@ single-video action has produced the expected Studio result:
 .\start-copyright-guard.ps1 -BrowserDebug
 ```
 
-During the initial burn-in `trace_mode: always` and `headless: false` are expected.
-After the Studio selectors are confirmed, change them to `on_error` and `true` if
-unattended headless operation works with the dedicated profile. If Google expires
-the session, affected videos receive `AUTH_REQUIRED`; run `-Login` again.
+The checked-in defaults use `trace_mode: on_error` and disable standalone
+screenshots so a long-running guard does not accumulate a full trace for every
+successful two-hour inspection. Add `-BrowserDebug` to the PowerShell launcher
+(or `--browser-debug` to `copyright_guard.py`) for temporary always-on traces,
+screenshots, a visible browser, and browser event logs. If Google expires the
+session, affected videos receive `AUTH_REQUIRED`; run `-Login` again.
 
 Only one guard instance can own `data/youtube_copyright_guard.lock`. Ctrl+C uses an
 interruptible event and does not wait for Studio processing. An interrupted browser

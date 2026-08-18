@@ -93,7 +93,8 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(config.youtube_copyright.mode, "automatic")
         self.assertEqual(config.youtube_copyright.protected_regions, ("PL", "DE"))
         self.assertEqual(config.youtube_copyright.max_trim_fraction, 0.9)
-        self.assertEqual(config.youtube_copyright.browser.trace_mode, "always")
+        self.assertEqual(config.youtube_copyright.browser.trace_mode, "on_error")
+        self.assertFalse(config.youtube_copyright.browser.screenshots)
         self.assertEqual(config.youtube_copyright.browser.channel, "chrome")
         self.assertIsNone(config.youtube_copyright.browser.executable_path)
 

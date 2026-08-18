@@ -117,9 +117,10 @@ youtube_copyright:
     executable_path: ${YOUTUBE_STUDIO_BROWSER_PATH:-}
     headless: false
     locale: en-US
-    # Keep successful traces during the initial burn-in; switch to on_error later.
-    trace_mode: always # off | on_error | always
-    screenshots: true
+    # Normal operation keeps a full trace only when Studio automation fails.
+    # Use --browser-debug for temporary always-on traces and screenshots.
+    trace_mode: on_error # off | on_error | always
+    screenshots: false
     console_logging: true
     failed_request_logging: true
     navigation_timeout_seconds: 60
