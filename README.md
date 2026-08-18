@@ -403,6 +403,20 @@ restart it. Submitted edits are rechecked in a later cycle. Full architecture an
 state details are documented in
 [`docs/YOUTUBE_COPYRIGHT_GUARD.md`](docs/YOUTUBE_COPYRIGHT_GUARD.md).
 
+After manually verifying that an interrupted Studio edit is safe to retry, reset
+only its `UNCERTAIN` history without editing SQLite directly:
+
+```powershell
+.\start-copyright-guard.ps1 -ResetVideo videoId1,videoId2
+```
+
+```bash
+./start-copyright-guard.sh --reset-video videoId1 --reset-video videoId2
+```
+
+The reset is a one-shot command. It preserves the audit history as `CANCELLED` and
+does not alter successful, processing, or ordinarily failed actions.
+
 ## Manual cleanup
 
 Cleanup is never called by `main.py`. Preview or execute it manually:

@@ -6,6 +6,7 @@ param(
     [switch]$BrowserDebug,
     [switch]$Login,
     [string[]]$VideoId = @(),
+    [string[]]$ResetVideo = @(),
     [ValidateRange(1, 3600)]
     [int]$RestartDelaySeconds = 10,
     [Parameter(ValueFromRemainingArguments = $true)]
@@ -30,6 +31,9 @@ $forwardedConfig = @($ForwardedArguments | Where-Object {
 }).Count -gt 0
 $forwardedOnce = $ForwardedArguments -contains "--once"
 $forwardedLogin = $ForwardedArguments -contains "--login"
+$forwardedReset = @($ForwardedArguments | Where-Object {
+    $_ -eq "--reset-video" -or $_ -like "--reset-video=*"
+}).Count -gt 0
 
 function Write-LauncherLog {
     param([Parameter(Mandatory = $true)][string]$Message)
@@ -47,6 +51,7 @@ while ($true) {
     if ($BrowserDebug) { $arguments += "--browser-debug" }
     if ($Login) { $arguments += "--login" }
     foreach ($id in $VideoId) { $arguments += @("--video-id", $id) }
+    foreach ($id in $ResetVideo) { $arguments += @("--reset-video", $id) }
     $arguments += $ForwardedArguments
 
     & $python @arguments
@@ -59,7 +64,7 @@ while ($true) {
         Write-LauncherLog "copyright_guard.py exited successfully."
         exit 0
     }
-    if ($Once -or $Login -or $forwardedOnce -or $forwardedLogin) {
+    if ($Once -or $Login -or $ResetVideo.Count -gt 0 -or $forwardedOnce -or $forwardedLogin -or $forwardedReset) {
         Write-LauncherLog "copyright_guard.py exited with code $exitCode; one-shot mode will not restart."
         exit $exitCode
     }

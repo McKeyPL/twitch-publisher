@@ -183,6 +183,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--config", type=Path, default=Path("config.yaml"))
     parser.add_argument("--once", action="store_true")
     parser.add_argument("--video-id", action="append", default=[])
+    parser.add_argument(
+        "--reset-video",
+        action="append",
+        default=[],
+        metavar="VIDEO_ID",
+        help=(
+            "Cancel UNCERTAIN actions for this video so the updated automation "
+            "may retry; may be repeated"
+        ),
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--browser-debug", action="store_true")
     parser.add_argument(
@@ -212,6 +222,37 @@ def main(argv: Sequence[str] | None = None) -> int:
             ),
         )
     config = replace(config, youtube_copyright=copyright_config)
+    lock_path = config.paths.database.parent / "youtube_copyright_guard.lock"
+    if args.reset_video:
+        configure_logging(config)
+        try:
+            with SingleInstanceLock(lock_path):
+                with CopyrightStateStore(config.paths.database) as copyright_store:
+                    total = 0
+                    unique_video_ids = tuple(dict.fromkeys(args.reset_video))
+                    for video_id in unique_video_ids:
+                        reset = copyright_store.reset_uncertain_actions(video_id)
+                        total += reset
+                        if reset:
+                            logger.info(
+                                "Reset %d UNCERTAIN action(s) for YouTube video %s",
+                                reset,
+                                video_id,
+                            )
+                        else:
+                            logger.warning(
+                                "No UNCERTAIN actions found for YouTube video %s",
+                                video_id,
+                            )
+                    logger.info(
+                        "Copyright retry reset finished: videos=%d actions=%d",
+                        len(unique_video_ids),
+                        total,
+                    )
+            return 0
+        except (GuardAlreadyRunning, ValueError) as exc:
+            logger.error("Copyright retry reset failed: %s", exc)
+            return 2
     if args.login:
         copyright_config = replace(
             copyright_config,
@@ -223,7 +264,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             config.youtube_copyright.browser,
             config.youtube_copyright.diagnostics,
         )
-        lock_path = config.paths.database.parent / "youtube_copyright_guard.lock"
         try:
             with SingleInstanceLock(lock_path):
                 manager.login("interactive-login")
@@ -232,7 +272,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             logger.error("YouTube Studio login failed: %s", exc)
             return 2
         return 0
-    lock_path = config.paths.database.parent / "youtube_copyright_guard.lock"
     try:
         with SingleInstanceLock(lock_path):
             return run(config, once=args.once, video_ids=args.video_id)

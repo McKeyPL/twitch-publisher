@@ -183,3 +183,45 @@ def test_caption_backup_audit_record(tmp_path: Path) -> None:
             action.id, status="SERVING", adjusted_path=tmp_path / "adjusted.srt"
         )
         assert updated.status == "SERVING"
+
+
+def test_reset_uncertain_actions_preserves_history_and_allows_retry(
+    tmp_path: Path,
+) -> None:
+    with CopyrightStateStore(tmp_path / "state.sqlite3") as store:
+        store.start_run("run-reset", "automatic")
+        store.upsert_video(
+            CopyrightVideo(
+                video_id="reset-video",
+                state=VideoState.MANUAL_REQUIRED,
+                processing=True,
+                last_error="outcome unknown",
+            )
+        )
+        uncertain = store.add_action(
+            CopyrightAction(
+                None,
+                "run-reset",
+                "reset-video",
+                RemediationAction.MUTE_ALL,
+                ActionState.UNCERTAIN,
+            )
+        )
+        failed = store.add_action(
+            CopyrightAction(
+                None,
+                "run-reset",
+                "reset-video",
+                RemediationAction.MUTE_ALL,
+                ActionState.FAILED,
+            )
+        )
+
+        assert store.reset_uncertain_actions("reset-video") == 1
+        assert store.get_action(uncertain.id).state is ActionState.CANCELLED
+        assert store.get_action(failed.id).state is ActionState.FAILED
+        video = store.get_video("reset-video")
+        assert video.state is VideoState.ACTION_PENDING
+        assert not video.processing
+        assert video.last_error is None
+        assert store.reset_uncertain_actions("reset-video") == 0

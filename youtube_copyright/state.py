@@ -609,6 +609,46 @@ class CopyrightStateStore:
         rows = self._require_connection().execute(sql, parameters).fetchall()
         return [self._action_from_row(row) for row in rows]
 
+    def reset_uncertain_actions(self, video_id: str) -> int:
+        """Cancel uncertain outcomes so a user-approved retry can be planned."""
+
+        normalized_id = _video_id(video_id)
+        now = _serialize(_now())
+        reset_note = "Manually reset for retry after verifying the Studio outcome"
+        with self._require_connection():
+            cursor = self._require_connection().execute(
+                """
+                UPDATE youtube_copyright_action SET
+                    state = ?,
+                    error_message = CASE
+                        WHEN error_message IS NULL OR error_message = '' THEN ?
+                        ELSE error_message || char(10) || ?
+                    END,
+                    completed_at = COALESCE(completed_at, ?)
+                WHERE video_id = ? AND state = ?
+                """,
+                (
+                    ActionState.CANCELLED.value,
+                    reset_note,
+                    reset_note,
+                    now,
+                    normalized_id,
+                    ActionState.UNCERTAIN.value,
+                ),
+            )
+            count = cursor.rowcount
+            if count:
+                self._require_connection().execute(
+                    """
+                    UPDATE youtube_copyright_video SET
+                        state = ?, processing = 0, last_error = NULL,
+                        next_check_at = NULL, updated_at = ?
+                    WHERE video_id = ?
+                    """,
+                    (VideoState.ACTION_PENDING.value, now, normalized_id),
+                )
+        return count
+
     def save_caption_backup(
         self,
         *,

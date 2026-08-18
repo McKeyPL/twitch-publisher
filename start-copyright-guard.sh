@@ -9,6 +9,7 @@ BROWSER_DEBUG=false
 LOGIN=false
 RESTART_DELAY=10
 VIDEO_IDS=()
+RESET_VIDEO_IDS=()
 CHILD_PID=""
 
 usage() {
@@ -20,6 +21,7 @@ Usage: ./start-copyright-guard.sh [options]
   --browser-debug
   --login
   --video-id ID             May be repeated
+  --reset-video ID           Cancel UNCERTAIN actions; may be repeated
   --restart-delay SECONDS
 EOF
 }
@@ -32,6 +34,7 @@ while (($#)); do
         --browser-debug) BROWSER_DEBUG=true; shift ;;
         --login) LOGIN=true; shift ;;
         --video-id) VIDEO_IDS+=("$2"); shift 2 ;;
+        --reset-video) RESET_VIDEO_IDS+=("$2"); shift 2 ;;
         --restart-delay) RESTART_DELAY="$2"; shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *) printf '[ERROR] Unknown option: %s\n' "$1" >&2; usage; exit 2 ;;
@@ -64,6 +67,7 @@ while true; do
     $BROWSER_DEBUG && args+=(--browser-debug)
     $LOGIN && args+=(--login)
     for id in "${VIDEO_IDS[@]}"; do args+=(--video-id "$id"); done
+    for id in "${RESET_VIDEO_IDS[@]}"; do args+=(--reset-video "$id"); done
 
     .venv/bin/python "${args[@]}" &
     CHILD_PID=$!
@@ -72,7 +76,7 @@ while true; do
     CHILD_PID=""
     if ((exit_code == 130)); then exit 130; fi
     if ((exit_code == 0)); then exit 0; fi
-    if $ONCE || $LOGIN; then exit "$exit_code"; fi
+    if $ONCE || $LOGIN || ((${#RESET_VIDEO_IDS[@]})); then exit "$exit_code"; fi
     ((restart_count += 1))
     sleep "$RESTART_DELAY"
 done
