@@ -151,7 +151,7 @@ class CopyrightGuardService:
 
             submitted = 0
             if mode != "report":
-                for video_id in actionable:
+                for candidate_index, video_id in enumerate(actionable):
                     if self.stop_event.is_set():
                         break
                     if self._remediate_video(video_id, run_id):
@@ -160,6 +160,14 @@ class CopyrightGuardService:
                             submitted
                             >= self.config.youtube_copyright.max_actions_per_cycle
                         ):
+                            deferred = actionable[candidate_index + 1 :]
+                            if deferred:
+                                logger.info(
+                                    "Studio action limit reached; deferring %d video(s) "
+                                    "to the next cycle: %s",
+                                    len(deferred),
+                                    ", ".join(deferred),
+                                )
                             break
 
             result = CycleResult(
@@ -256,14 +264,21 @@ class CopyrightGuardService:
             self.config.youtube_copyright.diagnostics,
         )
         action_record: CopyrightAction | None = None
+        diagnostic: Any | None = None
         next_check = datetime.now(timezone.utc) + timedelta(
             hours=self.config.youtube_copyright.interval_hours
         )
         try:
             with manager.open(run_id, video_id=video_id) as session:
+                diagnostic = session.diagnostic
                 executor = StudioCopyrightExecutor(session.page, session.diagnostic)
                 inspection = executor.inspect(video_id)
                 if inspection.processing:
+                    logger.info(
+                        "YouTube Studio is still processing an edit for %s; "
+                        "deferring it to the next cycle",
+                        video_id,
+                    )
                     latest = self.copyright_store.latest_action(video_id)
                     if latest and latest.state is ActionState.SUBMITTED:
                         self.copyright_store.update_action(latest.id, ActionState.PROCESSING)
@@ -310,12 +325,26 @@ class CopyrightGuardService:
                     history,
                     self.config.youtube_copyright,
                 )
+                logger.info(
+                    "Copyright policy for %s: claim=%r type=%s action=%s "
+                    "history=%d reason=%s",
+                    video_id,
+                    parsed_claim.claim.content_title,
+                    parsed_claim.claim.claim_type.value,
+                    decision.action.value if decision.action else "NONE",
+                    len(history),
+                    decision.reason,
+                )
                 if decision.wait_for_processing:
                     self.copyright_store.update_video_state(
                         video_id,
                         VideoState.PROCESSING,
                         processing=True,
                         next_check_at=next_check,
+                    )
+                    logger.info(
+                        "Deferring %s because an earlier Studio edit is still processing",
+                        video_id,
                     )
                     return False
                 if decision.action is None:
@@ -329,6 +358,13 @@ class CopyrightGuardService:
                         state,
                         last_error=decision.reason,
                         next_check_at=next_check,
+                    )
+                    logger.warning(
+                        "No automatic copyright action will be submitted for %s: %s "
+                        "(state=%s)",
+                        video_id,
+                        decision.reason,
+                        state.value,
                     )
                     return False
 
@@ -439,6 +475,12 @@ class CopyrightGuardService:
                     processing=True,
                     next_check_at=next_check,
                 )
+                logger.info(
+                    "Submitted Studio action %s for %s (claim=%r)",
+                    decision.action.value,
+                    video_id,
+                    parsed_claim.claim.content_title,
+                )
                 return True
         except StudioAuthRequired as exc:
             self.copyright_store.update_video_state(
@@ -467,6 +509,30 @@ class CopyrightGuardService:
             )
             raise
         except Exception as exc:
+            if diagnostic is not None:
+                try:
+                    diagnostic.write_json(
+                        "failure",
+                        {
+                            "video_id": video_id,
+                            "error_type": type(exc).__name__,
+                            "error_message": str(exc),
+                            "action_id": (
+                                action_record.id if action_record is not None else None
+                            ),
+                            "action": (
+                                action_record.action.value
+                                if action_record is not None
+                                else None
+                            ),
+                        },
+                    )
+                except Exception:
+                    logger.warning(
+                        "Could not save failure diagnostics for %s",
+                        video_id,
+                        exc_info=True,
+                    )
             if action_record is not None and action_record.id is not None:
                 self.copyright_store.update_action(
                     action_record.id, ActionState.FAILED, error_message=str(exc)

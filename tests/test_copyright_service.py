@@ -216,6 +216,73 @@ def test_action_limit_counts_submissions_not_processing_candidates(
     assert [call.args[0] for call in remediate.call_args_list] == ids[:3]
 
 
+def test_failed_studio_action_writes_self_contained_diagnostic(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    from dataclasses import replace
+
+    config = replace(
+        config,
+        youtube_copyright=replace(config.youtube_copyright, mode="automatic"),
+    )
+    service_api = _service_for([_resource("blocked-video", {"allowed": []})])
+    parsed = StudioClaimParser().parse_rows(
+        "blocked-video",
+        [
+            {
+                "text": "Song\nSound recording\nBlocked worldwide",
+                "actions": "Erase song",
+            }
+        ],
+    )[0]
+    browser_session = MagicMock(
+        page=MagicMock(),
+        diagnostic=MagicMock(),
+        trace_path=tmp_path / "trace.zip",
+    )
+    browser_context = MagicMock()
+    browser_context.__enter__.return_value = browser_session
+    manager = MagicMock()
+    manager.open.return_value = browser_context
+    executor = MagicMock()
+    executor.inspect.return_value = StudioInspection(
+        "blocked-video",
+        False,
+        (parsed,),
+        "https://studio.youtube.com/video/blocked-video/claims",
+    )
+    executor.execute.side_effect = RuntimeError("current Studio selector changed")
+
+    with (
+        StateStore(config.paths.database) as quota_store,
+        CopyrightStateStore(config.paths.database) as copyright_store,
+        patch("youtube_copyright.service.StudioBrowserManager", return_value=manager),
+        patch("youtube_copyright.service.StudioCopyrightExecutor", return_value=executor),
+    ):
+        result = CopyrightGuardService(
+            config,
+            copyright_store,
+            quota_store,
+            api_service=service_api,
+        ).run_cycle(video_ids=["blocked-video"], include_channel_uploads=False)
+
+        assert result.actions_submitted == 0
+        assert copyright_store.get_video("blocked-video").state is VideoState.FAILED
+
+    failure_calls = [
+        call
+        for call in browser_session.diagnostic.write_json.call_args_list
+        if call.args[0] == "failure"
+    ]
+    assert len(failure_calls) == 1
+    assert failure_calls[0].args[1]["error_type"] == "RuntimeError"
+    assert failure_calls[0].args[1]["error_message"] == (
+        "current Studio selector changed"
+    )
+    assert failure_calls[0].args[1]["action"] == "ERASE_SONG"
+
+
 def test_trim_resolution_retimes_owned_captions_before_resolved(tmp_path: Path) -> None:
     config = _config(tmp_path)
     from dataclasses import replace

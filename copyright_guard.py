@@ -154,6 +154,14 @@ def run(
                                 "The cycle found actionable restrictions but submitted "
                                 "no Studio edits; inspect per-video errors and diagnostics"
                             )
+                        removed = prune_diagnostics(
+                            config.youtube_copyright.diagnostics
+                        )
+                        if removed:
+                            logger.info(
+                                "Pruned %d expired copyright diagnostic runs",
+                                len(removed),
+                            )
                     except Exception:
                         logger.exception(
                             "Copyright guard cycle failed; the next cycle will retry"
