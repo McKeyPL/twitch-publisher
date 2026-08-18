@@ -12,6 +12,7 @@ from youtube_copyright.studio_executor import (
     StudioAmbiguousUi,
     StudioAutomationUnavailable,
     StudioCopyrightExecutor,
+    StudioSubmissionUncertain,
     _visible_candidates,
 )
 from youtube_copyright.studio_parser import StudioClaimParser, _CLAIM_EXTRACTION_SCRIPT
@@ -150,6 +151,7 @@ class FakePage:
         self.body_text = ""
         self.events: list[str] = []
         self.response_error: Exception | None = None
+        self.submission_timeout = False
 
     def expect_response(self, predicate, **kwargs: object) -> FakeResponseInfo:
         assert predicate(FakeResponse())
@@ -164,10 +166,17 @@ class FakePage:
         self.events.append(f"wait:{milliseconds}")
         return None
 
-    def wait_for_function(self, script: str, **kwargs: object) -> None:
-        assert "ytcr-video-content-list-row" in script
-        assert kwargs["timeout"] == 10_000
-        self.events.append("wait_for_claim_ui")
+    def wait_for_function(self, script: str, *args: object, **kwargs: object) -> None:
+        if "ytcr-video-content-list-row" in script:
+            assert kwargs["timeout"] == 10_000
+            self.events.append("wait_for_claim_ui")
+            return
+        assert "operation in progress" in script.lower()
+        assert "video editing is in progress" in args[0]
+        assert kwargs["timeout"] == 30_000
+        self.events.append("wait_for_submission")
+        if self.submission_timeout:
+            raise TimeoutError("submission marker timed out")
 
     def screenshot(self, path: str, **kwargs: object) -> None:
         Path(path).write_bytes(b"png")
@@ -382,6 +391,33 @@ def test_automatic_erase_accepts_permanent_edit_checkbox(tmp_path: Path) -> None
     assert page.roles["checkbox"][0].checked
     assert page.roles["checkbox"][0].check_calls == 0
     assert page.roles["button"][2].clicks == 1
+    assert "wait_for_submission" in page.events
+
+
+def test_missing_marker_after_irreversible_click_has_uncertain_outcome(
+    tmp_path: Path,
+) -> None:
+    page = FakePage(
+        tmp_path,
+        {
+            "button": ["Take action", "Erase song"],
+            "menuitem": ["Erase song"],
+        },
+    )
+    page.submission_timeout = True
+    parsed = StudioClaimParser().parse_rows(
+        "video123",
+        [{"text": "Song\nAudio", "actions": ""}],
+    )[0]
+
+    with pytest.raises(StudioSubmissionUncertain, match="irreversible"):
+        StudioCopyrightExecutor(page, _diagnostic(tmp_path)).execute(
+            "video123",
+            parsed,
+            RemediationAction.ERASE_SONG,
+            dry_run=False,
+            trace_path=None,
+        )
 
 
 def test_current_erase_flow_saves_before_permanent_edit_confirmation(

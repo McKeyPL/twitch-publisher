@@ -45,6 +45,23 @@ _SUBMITTED_MARKERS = _PROCESSING_MARKERS + (
     "changes saved",
 )
 
+_SUBMISSION_CONFIRMED_SCRIPT = r"""
+markers => {
+  const bodyText = (document.body && document.body.innerText || '').toLowerCase();
+  if (markers.some(marker => bodyText.includes(marker))) return true;
+  const visible = element => {
+    const style = window.getComputedStyle(element);
+    const rect = element.getBoundingClientRect();
+    return style.visibility !== 'hidden' && style.display !== 'none' &&
+      rect.width > 0 && rect.height > 0;
+  };
+  return Array.from(document.querySelectorAll('[role="progressbar"]')).some(element =>
+    visible(element) &&
+    /operation in progress/i.test(element.getAttribute('aria-label') || '')
+  );
+}
+"""
+
 _CLAIM_UI_READY_SCRIPT = r"""
 () => {
   const rows = document.querySelector(
@@ -70,6 +87,10 @@ elements => elements.flatMap((element, index) => {
 
 class StudioAutomationUnavailable(RuntimeError):
     pass
+
+
+class StudioSubmissionUncertain(StudioAutomationUnavailable):
+    """The irreversible confirmation was clicked but its outcome is unknown."""
 
 
 class StudioAmbiguousUi(RuntimeError):
@@ -361,13 +382,16 @@ class StudioCopyrightExecutor:
         return True
 
     def _wait_for_submitted_marker(self) -> None:
-        pattern = _pattern(_SUBMITTED_MARKERS)
-        marker = self.page.get_by_text(pattern, exact=False).first
         try:
-            marker.wait_for(state="visible", timeout=30_000)
+            self.page.wait_for_function(
+                _SUBMISSION_CONFIRMED_SCRIPT,
+                list(_SUBMITTED_MARKERS),
+                timeout=30_000,
+            )
         except Exception as exc:
-            raise StudioAutomationUnavailable(
-                "Studio did not confirm that the edit was submitted"
+            raise StudioSubmissionUncertain(
+                "Studio did not confirm the result after the irreversible edit "
+                "confirmation was clicked"
             ) from exc
 
     def _validate_video_id(self, video_id: str) -> None:

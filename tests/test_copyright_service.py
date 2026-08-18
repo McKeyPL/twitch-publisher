@@ -12,6 +12,7 @@ from youtube_copyright.state import CopyrightStateStore
 from youtube_copyright.studio_executor import (
     StudioExecutionResult,
     StudioInspection,
+    StudioSubmissionUncertain,
 )
 from youtube_copyright.studio_parser import StudioClaimParser
 
@@ -281,6 +282,70 @@ def test_failed_studio_action_writes_self_contained_diagnostic(
         "current Studio selector changed"
     )
     assert failure_calls[0].args[1]["action"] == "ERASE_SONG"
+
+
+def test_unconfirmed_irreversible_action_is_not_retried_automatically(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    from dataclasses import replace
+
+    config = replace(
+        config,
+        youtube_copyright=replace(config.youtube_copyright, mode="automatic"),
+    )
+    service_api = _service_for([_resource("blocked-video", {"allowed": []})])
+    parsed = StudioClaimParser().parse_rows(
+        "blocked-video",
+        [{"text": "Song\nAudio\nBlocked worldwide", "actions": "Erase song"}],
+    )[0]
+    browser_session = MagicMock(
+        page=MagicMock(),
+        diagnostic=MagicMock(),
+        trace_path=tmp_path / "trace.zip",
+    )
+    browser_context = MagicMock()
+    browser_context.__enter__.return_value = browser_session
+    manager = MagicMock()
+    manager.open.return_value = browser_context
+    executor = MagicMock()
+    executor.inspect.return_value = StudioInspection(
+        "blocked-video",
+        False,
+        (parsed,),
+        "https://studio.youtube.com/video/blocked-video/claims",
+    )
+    executor.execute.side_effect = StudioSubmissionUncertain("outcome unknown")
+
+    with (
+        StateStore(config.paths.database) as quota_store,
+        CopyrightStateStore(config.paths.database) as copyright_store,
+        patch("youtube_copyright.service.StudioBrowserManager", return_value=manager),
+        patch("youtube_copyright.service.StudioCopyrightExecutor", return_value=executor),
+    ):
+        guard = CopyrightGuardService(
+            config,
+            copyright_store,
+            quota_store,
+            api_service=service_api,
+        )
+        first = guard.run_cycle(
+            video_ids=["blocked-video"], include_channel_uploads=False
+        )
+        action = copyright_store.latest_action("blocked-video")
+
+        assert first.actions_submitted == 0
+        assert action is not None
+        assert action.state is ActionState.UNCERTAIN
+        assert copyright_store.get_video("blocked-video").state is VideoState.MANUAL_REQUIRED
+
+        second = guard.run_cycle(
+            video_ids=["blocked-video"], include_channel_uploads=False
+        )
+
+        assert second.actions_submitted == 0
+        assert executor.execute.call_count == 1
+        assert copyright_store.latest_action("blocked-video").state is ActionState.UNCERTAIN
 
 
 def test_trim_resolution_retimes_owned_captions_before_resolved(tmp_path: Path) -> None:

@@ -27,7 +27,7 @@ from .models import (
 )
 from .policy import choose_action, validate_trim_ranges
 from .state import CopyrightStateStore
-from .studio_executor import StudioCopyrightExecutor
+from .studio_executor import StudioCopyrightExecutor, StudioSubmissionUncertain
 
 
 logger = logging.getLogger(__name__)
@@ -491,6 +491,29 @@ class CopyrightGuardService:
             )
             logger.error("YouTube Studio authentication required: %s", exc)
             return False
+        except StudioSubmissionUncertain as exc:
+            self._save_failure_diagnostic(
+                diagnostic, video_id, action_record, exc
+            )
+            if action_record is not None and action_record.id is not None:
+                self.copyright_store.update_action(
+                    action_record.id,
+                    ActionState.UNCERTAIN,
+                    error_message=str(exc),
+                )
+            self.copyright_store.update_video_state(
+                video_id,
+                VideoState.MANUAL_REQUIRED,
+                last_error=str(exc),
+                next_check_at=next_check,
+            )
+            logger.error(
+                "Studio action outcome is uncertain for %s; automatic retry is "
+                "blocked until the result is verified: %s",
+                video_id,
+                exc,
+            )
+            return False
         except KeyboardInterrupt:
             if action_record is not None and action_record.id is not None:
                 self.copyright_store.update_action(
@@ -509,30 +532,9 @@ class CopyrightGuardService:
             )
             raise
         except Exception as exc:
-            if diagnostic is not None:
-                try:
-                    diagnostic.write_json(
-                        "failure",
-                        {
-                            "video_id": video_id,
-                            "error_type": type(exc).__name__,
-                            "error_message": str(exc),
-                            "action_id": (
-                                action_record.id if action_record is not None else None
-                            ),
-                            "action": (
-                                action_record.action.value
-                                if action_record is not None
-                                else None
-                            ),
-                        },
-                    )
-                except Exception:
-                    logger.warning(
-                        "Could not save failure diagnostics for %s",
-                        video_id,
-                        exc_info=True,
-                    )
+            self._save_failure_diagnostic(
+                diagnostic, video_id, action_record, exc
+            )
             if action_record is not None and action_record.id is not None:
                 self.copyright_store.update_action(
                     action_record.id, ActionState.FAILED, error_message=str(exc)
@@ -545,6 +547,39 @@ class CopyrightGuardService:
             )
             logger.exception("Copyright remediation failed for %s", video_id)
             return False
+
+    @staticmethod
+    def _save_failure_diagnostic(
+        diagnostic: Any | None,
+        video_id: str,
+        action_record: CopyrightAction | None,
+        error: Exception,
+    ) -> None:
+        if diagnostic is None:
+            return
+        try:
+            diagnostic.write_json(
+                "failure",
+                {
+                    "video_id": video_id,
+                    "error_type": type(error).__name__,
+                    "error_message": str(error),
+                    "action_id": (
+                        action_record.id if action_record is not None else None
+                    ),
+                    "action": (
+                        action_record.action.value
+                        if action_record is not None
+                        else None
+                    ),
+                },
+            )
+        except Exception:
+            logger.warning(
+                "Could not save failure diagnostics for %s",
+                video_id,
+                exc_info=True,
+            )
 
     def _finalize_resolved_action(self, resource: Any, action: CopyrightAction) -> bool:
         if action.id is None:
