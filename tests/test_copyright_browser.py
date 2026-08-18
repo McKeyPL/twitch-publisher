@@ -10,6 +10,7 @@ from config import CopyrightBrowserConfig, CopyrightDiagnosticsConfig
 from youtube_copyright.browser_session import (
     StudioAuthRequired,
     StudioBrowserManager,
+    _request_failure_level,
 )
 from youtube_copyright.diagnostics import (
     DiagnosticRun,
@@ -179,3 +180,10 @@ def test_pruning_removes_only_marked_guard_run_directories(tmp_path: Path) -> No
     assert marked in removed
     assert not marked.exists()
     assert unmarked.exists()
+
+
+def test_expected_chromium_request_abort_is_not_logged_as_error() -> None:
+    import logging
+
+    assert _request_failure_level("net::ERR_ABORTED") == logging.DEBUG
+    assert _request_failure_level("net::ERR_CONNECTION_RESET") == logging.ERROR

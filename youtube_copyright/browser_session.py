@@ -27,6 +27,12 @@ logger = logging.getLogger(__name__)
 STUDIO_HOME = "https://studio.youtube.com/"
 
 
+def _request_failure_level(failure: str | None) -> int:
+    # Chromium aborts obsolete background requests while Studio changes routes.
+    # These are expected navigation noise, unlike DNS/TLS/connection failures.
+    return logging.DEBUG if "ERR_ABORTED" in (failure or "") else logging.ERROR
+
+
 class StudioAuthRequired(RuntimeError):
     pass
 
@@ -349,7 +355,8 @@ class StudioBrowserManager:
         if self.browser_config.failed_request_logging:
             page.on(
                 "requestfailed",
-                lambda request: logger.error(
+                lambda request: logger.log(
+                    _request_failure_level(request.failure),
                     "%s request failed: %s %s (%s)",
                     prefix,
                     request.method,
