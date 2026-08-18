@@ -58,6 +58,15 @@ _CLAIM_UI_READY_SCRIPT = r"""
 }
 """
 
+_VISIBLE_INDEXES_SCRIPT = r"""
+elements => elements.flatMap((element, index) => {
+  const style = window.getComputedStyle(element);
+  const rect = element.getBoundingClientRect();
+  return style.visibility !== 'hidden' && style.display !== 'none' &&
+    rect.width > 0 && rect.height > 0 ? [index] : [];
+})
+"""
+
 
 class StudioAutomationUnavailable(RuntimeError):
     pass
@@ -394,25 +403,38 @@ class StudioCopyrightExecutor:
             ),
             exact=True,
         )
-        result: list[Any] = []
-        for index in range(locator.count()):
-            candidate = locator.nth(index)
-            if candidate.is_visible():
-                result.append(candidate)
-        return result
+        return _visible_candidates(locator)
 
     def _visible_locators(self, role: str, aliases: Iterable[str]) -> list[Any]:
         locator = self.page.get_by_role(role, name=_pattern(aliases), exact=False)
-        result: list[Any] = []
-        for index in range(locator.count()):
-            candidate = locator.nth(index)
-            if candidate.is_visible():
-                result.append(candidate)
-        return result
+        return _visible_candidates(locator)
 
 
 def _pattern(aliases: Iterable[str]) -> re.Pattern[str]:
     return re.compile("|".join(re.escape(value) for value in aliases), re.IGNORECASE)
+
+
+def _visible_candidates(locator: Any) -> list[Any]:
+    """Resolve visibility in one browser round trip, even for large claim lists."""
+
+    try:
+        indexes = locator.evaluate_all(_VISIBLE_INDEXES_SCRIPT)
+        if isinstance(indexes, list) and all(
+            isinstance(index, int) and index >= 0 for index in indexes
+        ):
+            return [locator.nth(index) for index in indexes]
+    except Exception:
+        logger.debug(
+            "Batched Studio locator visibility check failed; using bounded fallback",
+            exc_info=True,
+        )
+
+    result: list[Any] = []
+    for index in range(locator.count()):
+        candidate = locator.nth(index)
+        if candidate.is_visible():
+            result.append(candidate)
+    return result
 
 
 def _unique_locators(locators: Iterable[Any]) -> list[Any]:

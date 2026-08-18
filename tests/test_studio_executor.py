@@ -12,6 +12,7 @@ from youtube_copyright.studio_executor import (
     StudioAmbiguousUi,
     StudioAutomationUnavailable,
     StudioCopyrightExecutor,
+    _visible_candidates,
 )
 from youtube_copyright.studio_parser import StudioClaimParser, _CLAIM_EXTRACTION_SCRIPT
 
@@ -67,12 +68,22 @@ class FakeElement:
 class FakeLocatorList:
     def __init__(self, elements: list[FakeElement]) -> None:
         self.elements = elements
+        self.evaluate_all_calls = 0
 
     def count(self) -> int:
         return len(self.elements)
 
     def nth(self, index: int) -> FakeElement:
         return self.elements[index]
+
+    def evaluate_all(self, script: str) -> list[int]:
+        assert "getBoundingClientRect" in script
+        self.evaluate_all_calls += 1
+        return [
+            index
+            for index, element in enumerate(self.elements)
+            if element.is_visible()
+        ]
 
 
 class FakeMarker:
@@ -189,6 +200,15 @@ class FakePage:
 
 def _diagnostic(tmp_path: Path) -> DiagnosticRun:
     return DiagnosticRun(CopyrightDiagnosticsConfig(tmp_path / "logs", 14), "run", "video123")
+
+
+def test_visibility_is_resolved_in_one_browser_round_trip() -> None:
+    locator = FakeLocatorList([FakeElement("first"), FakeElement("second")])
+
+    result = _visible_candidates(locator)
+
+    assert result == locator.elements
+    assert locator.evaluate_all_calls == 1
 
 
 def test_inspection_extracts_claims_and_processing_state(tmp_path: Path) -> None:
