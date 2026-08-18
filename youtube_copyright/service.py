@@ -94,15 +94,20 @@ class CopyrightGuardService:
         ignored: list[str] = []
         missing: list[str] = []
         try:
-            candidates: dict[str, str | None] = (
-                self.copyright_store.publisher_video_ids()
-                if include_publisher_videos
-                else {}
-            )
-            publisher_count = len(candidates)
             if video_ids is not None:
-                candidates.update({value.strip(): None for value in video_ids if value.strip()})
-            explicit_count = len(candidates) - publisher_count
+                candidates = {
+                    value.strip(): None for value in video_ids if value.strip()
+                }
+                publisher_count = 0
+                explicit_count = len(candidates)
+            else:
+                candidates = (
+                    self.copyright_store.publisher_video_ids()
+                    if include_publisher_videos
+                    else {}
+                )
+                publisher_count = len(candidates)
+                explicit_count = 0
             channel_count = 0
             if include_channel_uploads and video_ids is None:
                 channel_video_ids = self.api.list_uploaded_video_ids()

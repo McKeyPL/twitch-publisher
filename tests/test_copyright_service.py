@@ -147,6 +147,36 @@ def test_channel_only_inventory_ignores_stale_publisher_video_ids(
         copyright_store.publisher_video_ids.assert_not_called()
 
 
+def test_explicit_video_ids_limit_inventory_instead_of_extending_it(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    service_api = _service_for([_resource("explicit-video", None)])
+    with (
+        StateStore(config.paths.database) as quota_store,
+        CopyrightStateStore(config.paths.database) as copyright_store,
+    ):
+        guard = CopyrightGuardService(
+            config,
+            copyright_store,
+            quota_store,
+            api_service=service_api,
+        )
+        copyright_store.publisher_video_ids = MagicMock(
+            return_value={"unrequested-local-video": r"E:\old.mkv"}
+        )
+
+        result = guard.run_cycle(
+            video_ids=["explicit-video"],
+            include_channel_uploads=False,
+        )
+
+        assert result.videos_checked == 1
+        assert result.ignored_video_ids == ("explicit-video",)
+        assert result.missing_video_ids == ()
+        copyright_store.publisher_video_ids.assert_not_called()
+
+
 def test_automatic_cycle_submits_one_studio_action(tmp_path: Path) -> None:
     config = _config(tmp_path)
     from dataclasses import replace
