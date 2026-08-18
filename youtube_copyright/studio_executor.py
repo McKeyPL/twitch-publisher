@@ -84,6 +84,11 @@ elements => elements.flatMap((element, index) => {
 })
 """
 
+_MUTE_SEGMENT_SELECTOR = (
+    '#MUTE_SEGMENT, [name="MUTE_SEGMENT"], '
+    'ytcr-remove-song [role="radio"]:has-text("Mute all sound")'
+)
+
 
 class StudioAutomationUnavailable(RuntimeError):
     pass
@@ -426,9 +431,15 @@ class StudioCopyrightExecutor:
             # The current ytcr-remove-song component exposes MUTE_SEGMENT as a
             # custom radio element without a reliable accessible name. Its stable
             # component ID is present in the captured Studio traces.
-            candidates = _unique_locators(
-                _visible_candidates(self.page.locator("#MUTE_SEGMENT"))
-            )
+            fallback = self.page.locator(_MUTE_SEGMENT_SELECTOR)
+            try:
+                fallback.first.wait_for(state="visible", timeout=15_000)
+            except Exception:
+                logger.debug(
+                    "Studio mute-all fallback did not become visible within 15 seconds",
+                    exc_info=True,
+                )
+            candidates = _unique_locators(_visible_candidates(fallback))
             if len(candidates) > 1:
                 raise StudioAmbiguousUi(
                     "More than one visible #MUTE_SEGMENT control"
@@ -441,7 +452,7 @@ class StudioCopyrightExecutor:
                     "Studio mute-all control is present but disabled"
                 ) from alias_error
             candidate.click(timeout=10_000)
-            logger.info("Selected Studio mute-all option through #MUTE_SEGMENT")
+            logger.info("Selected Studio mute-all option through component fallback")
 
     def _visible_exact_locators(self, role: str, aliases: Iterable[str]) -> list[Any]:
         locator = self.page.get_by_role(

@@ -70,6 +70,11 @@ class FakeLocatorList:
     def __init__(self, elements: list[FakeElement]) -> None:
         self.elements = elements
         self.evaluate_all_calls = 0
+        self.wait_for_calls: list[dict[str, object]] = []
+
+    @property
+    def first(self) -> "FakeLocatorList":
+        return self
 
     def count(self) -> int:
         return len(self.elements)
@@ -85,6 +90,9 @@ class FakeLocatorList:
             for index, element in enumerate(self.elements)
             if element.is_visible()
         ]
+
+    def wait_for(self, **kwargs: object) -> None:
+        self.wait_for_calls.append(dict(kwargs))
 
 
 class FakeMarker:
@@ -354,7 +362,9 @@ def test_mute_all_falls_back_to_current_component_id(tmp_path: Path) -> None:
         },
     )
     mute_segment = FakeElement("unnamed mute control")
-    page.selectors["#MUTE_SEGMENT"] = [mute_segment]
+    from youtube_copyright.studio_executor import _MUTE_SEGMENT_SELECTOR
+
+    page.selectors[_MUTE_SEGMENT_SELECTOR] = [mute_segment]
     parsed = StudioClaimParser().parse_rows(
         "video123",
         [{"text": "Song\nAudio\n00:10 - 00:20", "actions": ""}],
