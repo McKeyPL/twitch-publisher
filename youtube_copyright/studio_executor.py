@@ -217,7 +217,7 @@ class StudioCopyrightExecutor:
         self._validate_video_id(video_id)
 
         if action is RemediationAction.MUTE_ALL:
-            self._click_unique_any_role(_ALIASES["mute_all"])
+            self._select_mute_all()
 
         confirmation = self.diagnostic.screenshot(
             self.page, f"confirmation_{action.value.lower()}"
@@ -417,6 +417,31 @@ class StudioCopyrightExecutor:
         raise StudioAutomationUnavailable(
             f"No Studio action matches {tuple(aliases)}"
         )
+
+    def _select_mute_all(self) -> None:
+        try:
+            self._click_unique_any_role(_ALIASES["mute_all"])
+            return
+        except StudioAutomationUnavailable as alias_error:
+            # The current ytcr-remove-song component exposes MUTE_SEGMENT as a
+            # custom radio element without a reliable accessible name. Its stable
+            # component ID is present in the captured Studio traces.
+            candidates = _unique_locators(
+                _visible_candidates(self.page.locator("#MUTE_SEGMENT"))
+            )
+            if len(candidates) > 1:
+                raise StudioAmbiguousUi(
+                    "More than one visible #MUTE_SEGMENT control"
+                ) from alias_error
+            if not candidates:
+                raise alias_error
+            candidate = candidates[0]
+            if candidate.get_attribute("aria-disabled") == "true":
+                raise StudioAutomationUnavailable(
+                    "Studio mute-all control is present but disabled"
+                ) from alias_error
+            candidate.click(timeout=10_000)
+            logger.info("Selected Studio mute-all option through #MUTE_SEGMENT")
 
     def _visible_exact_locators(self, role: str, aliases: Iterable[str]) -> list[Any]:
         locator = self.page.get_by_role(

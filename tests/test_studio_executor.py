@@ -152,6 +152,7 @@ class FakePage:
         self.events: list[str] = []
         self.response_error: Exception | None = None
         self.submission_timeout = False
+        self.selectors: dict[str, list[FakeElement]] = {}
 
     def expect_response(self, predicate, **kwargs: object) -> FakeResponseInfo:
         assert predicate(FakeResponse())
@@ -185,8 +186,9 @@ class FakePage:
         return self.rows
 
     def locator(self, selector: str):
-        assert selector == "body"
-        return FakeBody(self.body_text)
+        if selector == "body":
+            return FakeBody(self.body_text)
+        return FakeLocatorList(self.selectors.get(selector, []))
 
     def get_by_role(
         self,
@@ -341,6 +343,33 @@ def test_dry_run_selects_current_plural_mute_all_option(tmp_path: Path) -> None:
     assert page.roles["menuitem"][0].clicks == 1
     assert page.roles["radio"][0].clicks == 1
     assert page.keyboard.pressed == ["Escape"]
+
+
+def test_mute_all_falls_back_to_current_component_id(tmp_path: Path) -> None:
+    page = FakePage(
+        tmp_path,
+        {
+            "button": ["Take action"],
+            "menuitem": ["Erase song"],
+        },
+    )
+    mute_segment = FakeElement("unnamed mute control")
+    page.selectors["#MUTE_SEGMENT"] = [mute_segment]
+    parsed = StudioClaimParser().parse_rows(
+        "video123",
+        [{"text": "Song\nAudio\n00:10 - 00:20", "actions": ""}],
+    )[0]
+
+    result = StudioCopyrightExecutor(page, _diagnostic(tmp_path)).execute(
+        "video123",
+        parsed,
+        RemediationAction.MUTE_ALL,
+        dry_run=True,
+        trace_path=None,
+    )
+
+    assert result.dry_run
+    assert mute_segment.clicks == 1
 
 
 def test_automatic_trim_requires_and_clicks_one_confirmation(tmp_path: Path) -> None:
