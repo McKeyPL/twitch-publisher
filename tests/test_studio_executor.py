@@ -286,6 +286,34 @@ def test_dry_run_accepts_english_claims_ui_actions_button(tmp_path: Path) -> Non
     assert page.roles["menuitem"][0].clicks == 1
 
 
+def test_dry_run_selects_current_plural_mute_all_option(tmp_path: Path) -> None:
+    page = FakePage(
+        tmp_path,
+        {
+            "button": ["Take action"],
+            "menuitem": ["Erase song"],
+            "radio": ["Mute all sound in the claimed segments"],
+        },
+    )
+    parsed = StudioClaimParser().parse_rows(
+        "video123",
+        [{"text": "Song\nAudio\n00:10 - 00:20", "actions": ""}],
+    )[0]
+
+    result = StudioCopyrightExecutor(page, _diagnostic(tmp_path)).execute(
+        "video123",
+        parsed,
+        RemediationAction.MUTE_ALL,
+        dry_run=True,
+        trace_path=None,
+    )
+
+    assert result.dry_run
+    assert page.roles["menuitem"][0].clicks == 1
+    assert page.roles["radio"][0].clicks == 1
+    assert page.keyboard.pressed == ["Escape"]
+
+
 def test_automatic_trim_requires_and_clicks_one_confirmation(tmp_path: Path) -> None:
     page = FakePage(
         tmp_path,

@@ -21,6 +21,7 @@ _ALIASES = {
     "erase_song": ("erase song", "remove song"),
     "mute_all": (
         "mute all sound in the claimed segment",
+        "mute all sound in the claimed segments",
         "mute all sound in claimed segments",
         "mute all audio",
     ),
