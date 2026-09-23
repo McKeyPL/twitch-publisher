@@ -84,6 +84,17 @@ class WatcherConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class MemoryConfig:
+    enabled: bool
+    minimum_commit_headroom_gb: float
+    minimum_physical_available_gb: float
+    check_interval_seconds: float
+    youtube_reserve_mb: float
+    browser_reserve_mb: float
+    split_reserve_mb: float
+
+
+@dataclass(frozen=True, slots=True)
 class YouTubeConfig:
     enabled: bool
     client_secrets_file: Path | None
@@ -223,6 +234,7 @@ class LoggingConfig:
 class Config:
     paths: PathsConfig
     watcher: WatcherConfig
+    memory: MemoryConfig
     platforms: PlatformsConfig
     browser: BrowserConfig
     youtube_copyright: YouTubeCopyrightConfig
@@ -424,6 +436,7 @@ def config_from_dict(raw: Mapping[str, Any]) -> Config:
     root = _mapping(raw, "config")
     paths = _mapping(_required(root, "paths", "config"), "paths")
     watcher = _mapping(_required(root, "watcher", "config"), "watcher")
+    memory = _mapping(root.get("memory", {}), "memory")
     platforms = _mapping(_required(root, "platforms", "config"), "platforms")
     youtube = _mapping(_required(platforms, "youtube", "platforms"), "platforms.youtube")
     browser = _mapping(_required(root, "browser", "config"), "browser")
@@ -551,6 +564,33 @@ def config_from_dict(raw: Mapping[str, Any]) -> Config:
             size_stability_seconds=_positive_float(
                 _required(watcher, "size_stability_seconds", "watcher"),
                 "watcher.size_stability_seconds",
+            ),
+        ),
+        memory=MemoryConfig(
+            enabled=_boolean(memory.get("enabled", True), "memory.enabled"),
+            minimum_commit_headroom_gb=_positive_float(
+                memory.get("minimum_commit_headroom_gb", 16),
+                "memory.minimum_commit_headroom_gb",
+            ),
+            minimum_physical_available_gb=_positive_float(
+                memory.get("minimum_physical_available_gb", 4),
+                "memory.minimum_physical_available_gb",
+            ),
+            check_interval_seconds=_positive_float(
+                memory.get("check_interval_seconds", 5),
+                "memory.check_interval_seconds",
+            ),
+            youtube_reserve_mb=_positive_float(
+                memory.get("youtube_reserve_mb", 256),
+                "memory.youtube_reserve_mb",
+            ),
+            browser_reserve_mb=_positive_float(
+                memory.get("browser_reserve_mb", 2048),
+                "memory.browser_reserve_mb",
+            ),
+            split_reserve_mb=_positive_float(
+                memory.get("split_reserve_mb", 1024),
+                "memory.split_reserve_mb",
             ),
         ),
         platforms=PlatformsConfig(

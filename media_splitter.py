@@ -16,6 +16,7 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Callable
 
 from duration_check import probe_duration_seconds
+from memory_guard import MemoryGuard
 from srt_splitter import SRTError, SegmentWindow, split_srt_file
 
 
@@ -105,6 +106,8 @@ class MediaSplitter:
         max_replans: int = 3,
         disk_space_multiplier: float = 1.05,
         cancel_event: threading.Event | None = None,
+        memory_guard: MemoryGuard | None = None,
+        memory_reserve_bytes: int = 0,
         duration_probe: Callable[[Path], float] | None = None,
     ) -> None:
         work_name = work_directory_name.strip()
@@ -132,6 +135,8 @@ class MediaSplitter:
         self.max_replans = max_replans
         self.disk_space_multiplier = disk_space_multiplier
         self.cancel_event = cancel_event
+        self.memory_guard = memory_guard
+        self.memory_reserve_bytes = memory_reserve_bytes
         self.duration_probe = duration_probe or (
             lambda path: probe_duration_seconds(
                 path,
@@ -142,6 +147,11 @@ class MediaSplitter:
     def _raise_if_cancelled(self) -> None:
         if self.cancel_event is not None and self.cancel_event.is_set():
             raise KeyboardInterrupt("Media splitting was interrupted")
+        if self.memory_guard is not None:
+            self.memory_guard.ensure_safe(
+                "lossless FFmpeg split",
+                reserve_bytes=self.memory_reserve_bytes,
+            )
 
     def _work_directory(self, source: Path, platform: str) -> Path:
         identity = _source_identity(source)
@@ -244,13 +254,30 @@ class MediaSplitter:
             encoding="utf-8",
             errors="replace",
         )
-        output_queue: queue.Queue[str | None] = queue.Queue()
+        # FFmpeg normally emits little output, but keep the producer bounded so
+        # an unexpected warning storm can never grow with video duration.
+        output_queue: queue.Queue[str | None] = queue.Queue(maxsize=256)
 
         def read_output() -> None:
             assert process.stdout is not None
             for line in process.stdout:
-                output_queue.put(line.rstrip())
-            output_queue.put(None)
+                while True:
+                    try:
+                        output_queue.put(line.rstrip(), timeout=0.5)
+                        break
+                    except queue.Full:
+                        if process.poll() is not None:
+                            return
+            while True:
+                try:
+                    output_queue.put(None, timeout=0.5)
+                    break
+                except queue.Full:
+                    if process.poll() is not None and (
+                        self.cancel_event is not None
+                        and self.cancel_event.is_set()
+                    ):
+                        return
 
         reader = threading.Thread(target=read_output, daemon=True)
         reader.start()

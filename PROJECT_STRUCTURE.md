@@ -40,6 +40,7 @@ twitch-publisher/
 |-- duration_check.py           # file stability and ffprobe
 |-- srt_splitter.py             # UTF-8 SRT parsing and boundary-aligned parts
 |-- media_splitter.py           # lossless FFmpeg parts, limits, manifest/replan
+|-- memory_guard.py             # Windows commit/physical headroom guard
 |-- state.py                    # SQLite/WAL, parent/part status, quota
 |-- mover.py                    # safe movement into _uploaded
 |-- cleanup.py                  # separate manual dry-run-first CLI
@@ -53,6 +54,7 @@ twitch-publisher/
 |-- install.sh                  # Debian/Ubuntu/RHEL/CentOS installer
 |-- requirements.txt
 |-- requirements-dev.txt
+|-- MEMORY_AUDIT.md             # verified streaming paths and OOM safeguards
 `-- README.md
 ```
 
@@ -67,6 +69,8 @@ twitch-publisher/
   resets each part to a zero-based timeline.
 - `media_splitter.py` owns lossless stream-copy segmentation, disk preflight,
   manifest reuse, hard-limit verification, replanning, and cancellation.
+- `memory_guard.py` reads Windows system commit counters (or Linux `/proc`) and
+  stops a scan before fixed host headroom plus the operation reserve is exhausted.
 - `recording_name_normalizer.py` applies the legacy CDA filename profile and
   atomically migrates existing SQLite statuses after renaming a recording set.
 - `state.py` is the only module that writes parent/part upload status and local

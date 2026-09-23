@@ -12,6 +12,18 @@ watcher:
   # The second MKV size sample must occur at least this many seconds later.
   size_stability_seconds: 60
 
+# The Windows guard uses system commit (Committed Bytes / Commit Limit), not
+# merely Task Manager's Available RAM. Reserves are bounded transient budgets;
+# they are deliberately independent of VOD file size because uploads stream.
+memory:
+  enabled: true
+  minimum_commit_headroom_gb: 16
+  minimum_physical_available_gb: 4
+  check_interval_seconds: 5
+  youtube_reserve_mb: 256
+  browser_reserve_mb: 2048
+  split_reserve_mb: 1024
+
 platforms:
   youtube:
     enabled: true

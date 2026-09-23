@@ -12,6 +12,7 @@ from urllib.parse import urljoin
 
 from auth.browser_session import BrowserSessionManager
 from config import BrowserConfig, BrowserPlatformConfig, RetryConfig
+from memory_guard import MemoryGuard, MemoryPressureError
 from uploaders.base import BaseUploader, UploadResult
 from uploaders.browser_form import (
     BrowserUploadError,
@@ -242,9 +243,16 @@ class RumbleUploader(BaseUploader):
         retry_config: RetryConfig,
         *,
         cancel_event: threading.Event | None = None,
+        memory_guard: MemoryGuard | None = None,
+        memory_reserve_bytes: int = 0,
         session_factory: Callable[[BrowserConfig], BrowserSessionManager] = BrowserSessionManager,
     ) -> None:
-        super().__init__(retry_config, cancel_event)
+        super().__init__(
+            retry_config,
+            cancel_event,
+            memory_guard,
+            memory_reserve_bytes,
+        )
         self.config = config
         self.browser_config = browser_config
         self._session_manager = session_factory(browser_config)
@@ -312,6 +320,8 @@ class RumbleUploader(BaseUploader):
                 operation_name=f"upload {video_path.name}",
                 should_retry=should_retry_browser_error,
             )
+        except (MemoryError, MemoryPressureError):
+            raise
         except Exception as exc:
             if _is_file_size_limit_error(exc):
                 reason = str(exc)

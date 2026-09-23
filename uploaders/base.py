@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Callable, TypeVar
 
 from config import RetryConfig
+from memory_guard import MemoryGuard, MemoryPressureError
 
 
 logger = logging.getLogger(__name__)
@@ -37,13 +38,22 @@ class BaseUploader(ABC):
         self,
         retry_config: RetryConfig,
         cancel_event: threading.Event | None = None,
+        memory_guard: MemoryGuard | None = None,
+        memory_reserve_bytes: int = 0,
     ) -> None:
         self.retry_config = retry_config
         self.cancel_event = cancel_event
+        self.memory_guard = memory_guard
+        self.memory_reserve_bytes = memory_reserve_bytes
 
     def _raise_if_cancelled(self) -> None:
         if self.cancel_event is not None and self.cancel_event.is_set():
             raise UploadCancelled("Upload interrupted by the user")
+        if self.memory_guard is not None:
+            self.memory_guard.ensure_safe(
+                f"{self.platform_name} upload",
+                reserve_bytes=self.memory_reserve_bytes,
+            )
 
     @property
     @abstractmethod
@@ -91,6 +101,16 @@ class BaseUploader(ABC):
                     self.retry_config.max_attempts,
                 )
                 return operation()
+            except (MemoryError, MemoryPressureError):
+                # Retrying immediately while the host is under commit pressure can
+                # create a second browser/HTTP allocation and turn a recoverable
+                # condition into a system-wide OOM.
+                logger.critical(
+                    "%s: %s stopped by memory pressure; no immediate retry",
+                    self.platform_name,
+                    operation_name,
+                )
+                raise
             except Exception as exc:
                 retry_allowed = should_retry(exc) if should_retry else True
                 is_last = attempt >= self.retry_config.max_attempts

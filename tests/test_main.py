@@ -12,6 +12,7 @@ from config import Config, load_config
 from duration_check import ReadinessResult, ReadinessStatus
 from main import _request_stop, process_readiness_results, process_ready_recording
 from media_splitter import MediaPart, SplitPlan
+from memory_guard import MemoryPressureError
 from meta_parser import StreamMetadata
 from state import StateStore, UploadStatus
 from uploaders.base import BaseUploader, UploadResult
@@ -135,6 +136,40 @@ class FakeMediaSplitter:
 class FailingMediaSplitter(FakeMediaSplitter):
     def create_plan(self, *args, **kwargs):
         raise RuntimeError("FFmpeg rejected a timed metadata stream")
+
+
+def test_memory_pressure_stops_remaining_recordings_in_scan(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = config_for(tmp_path, monkeypatch)
+    first, first_metadata = make_recording(config.paths.recordings_root, "first")
+    second, second_metadata = make_recording(config.paths.recordings_root, "second")
+    uploader = FakeUploader(
+        "youtube",
+        config.retry,
+        error=MemoryPressureError("commit headroom is too low"),
+    )
+    results = [
+        ReadinessResult(ReadinessStatus.READY, "ready", first_metadata),
+        ReadinessResult(ReadinessStatus.READY, "ready", second_metadata),
+    ]
+
+    with StateStore(config.paths.database) as store:
+        process_readiness_results(
+            results,
+            config,
+            store,
+            {"youtube": uploader},
+            duration_probe=lambda path: 3600,
+        )
+        first_status = store.get_status(first, "youtube")
+        second_status = store.get_status(second, "youtube")
+
+    assert first_status is not None
+    assert first_status.status is UploadStatus.FAILED
+    assert second_status is None
+    assert uploader.uploaded == [first]
 
 
 class SequencedUploader(FakeUploader):

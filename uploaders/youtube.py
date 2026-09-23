@@ -17,6 +17,7 @@ from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaFileUpload
 
 from config import RetryConfig, YouTubeConfig
+from memory_guard import MemoryGuard, MemoryPressureError
 from state import StateStore
 from uploaders.base import BaseUploader, UploadResult
 from youtube_api import SCOPES, YouTubeApiClient
@@ -100,8 +101,15 @@ class YouTubeUploader(BaseUploader):
         state_store: StateStore,
         *,
         cancel_event: threading.Event | None = None,
+        memory_guard: MemoryGuard | None = None,
+        memory_reserve_bytes: int = 0,
     ) -> None:
-        super().__init__(retry_config, cancel_event)
+        super().__init__(
+            retry_config,
+            cancel_event,
+            memory_guard,
+            memory_reserve_bytes,
+        )
         self.config = config
         self.state_store = state_store
         self.api_client = YouTubeApiClient(config)
@@ -138,12 +146,19 @@ class YouTubeUploader(BaseUploader):
             logger.warning(warning)
             return None, warning
         try:
-            text = srt.read_text(encoding="utf-8-sig")
+            has_timecode = False
+            # Validate incrementally. Chat subtitles can be large; retaining the
+            # complete decoded file would needlessly duplicate it in memory.
+            with srt.open("r", encoding="utf-8-sig") as stream:
+                for line in stream:
+                    if SRT_TIMECODE_RE.fullmatch(line.rstrip("\r\n")):
+                        has_timecode = True
+                        break
         except UnicodeError as exc:
             warning = f"SRT {srt} is not valid UTF-8 and was skipped: {exc}"
             logger.warning(warning)
             return None, warning
-        if not SRT_TIMECODE_RE.search(text):
+        if not has_timecode:
             warning = f"SRT {srt} has no valid SubRip timecode and was skipped"
             logger.warning(warning)
             return None, warning
@@ -222,6 +237,7 @@ class YouTubeUploader(BaseUploader):
                 return CaptionUploadResult(False, error_message=quota_error)
 
         try:
+            self._raise_if_cancelled()
             captions_media = MediaFileUpload(
                 str(usable_srt),
                 mimetype="application/octet-stream",
@@ -244,6 +260,8 @@ class YouTubeUploader(BaseUploader):
                 operation_name=f"adding captions to {video_id}",
                 should_retry=_is_retriable_error,
             )
+        except (MemoryError, MemoryPressureError):
+            raise
         except HttpError as exc:
             if int(getattr(exc.resp, "status", 0)) == 409 and _youtube_error_reason(exc) == "captionExists":
                 logger.info(
@@ -356,6 +374,8 @@ class YouTubeUploader(BaseUploader):
             return UploadResult(False, error_message="YouTube title cannot be empty")
 
         try:
+            # Run the commit-limit preflight before reserving API quota.
+            self._raise_if_cancelled()
             usable_srt, captions_warning = self._prepare_srt(srt_path)
         except OSError as exc:
             return UploadResult(False, error_message=str(exc))
@@ -393,6 +413,8 @@ class YouTubeUploader(BaseUploader):
                     operation_name=f"uploading chunk of {video.name}",
                     should_retry=_is_retriable_error,
                 )
+        except (MemoryError, MemoryPressureError):
+            raise
         except Exception as exc:
             message = _friendly_youtube_error(exc)
             logger.exception("YouTube upload failed: %s", message)

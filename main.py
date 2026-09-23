@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import gc
 import json
 import logging
 import signal
@@ -22,6 +23,7 @@ from duration_check import (
 )
 from meta_parser import StreamMetadata
 from media_splitter import MediaSplitter, SplitConstraints, SplitPlan
+from memory_guard import MemoryGuard, MemoryPressureError, mebibytes
 from mover import move_processed_recording
 from recording_name_normalizer import normalize_recording_set_for_cda
 from state import (
@@ -97,7 +99,9 @@ def build_uploaders(
     config: Config,
     state_store: StateStore,
     cancel_event: threading.Event | None = None,
+    memory_guard: MemoryGuard | None = None,
 ) -> dict[str, BaseUploader]:
+    guard = memory_guard or MemoryGuard(config.memory)
     uploaders: dict[str, BaseUploader] = {}
     if config.platforms.youtube.enabled:
         uploaders["youtube"] = YouTubeUploader(
@@ -105,6 +109,8 @@ def build_uploaders(
             config.retry,
             state_store,
             cancel_event=cancel_event,
+            memory_guard=guard,
+            memory_reserve_bytes=mebibytes(config.memory.youtube_reserve_mb),
         )
     if config.platforms.cda.enabled:
         uploaders["cda"] = CDAUploader(
@@ -112,6 +118,8 @@ def build_uploaders(
             config.browser,
             config.retry,
             cancel_event=cancel_event,
+            memory_guard=guard,
+            memory_reserve_bytes=mebibytes(config.memory.browser_reserve_mb),
         )
     if config.platforms.rumble.enabled:
         uploaders["rumble"] = RumbleUploader(
@@ -119,6 +127,8 @@ def build_uploaders(
             config.browser,
             config.retry,
             cancel_event=cancel_event,
+            memory_guard=guard,
+            memory_reserve_bytes=mebibytes(config.memory.browser_reserve_mb),
         )
     return uploaders
 
@@ -713,6 +723,15 @@ def process_ready_recording(
             max_replans=config.splitting.max_replans,
             disk_space_multiplier=config.splitting.disk_space_multiplier,
             cancel_event=cancel_event,
+            memory_guard=next(
+                (
+                    uploader.memory_guard
+                    for uploader in uploaders.values()
+                    if uploader.memory_guard is not None
+                ),
+                None,
+            ),
+            memory_reserve_bytes=mebibytes(config.memory.split_reserve_mb),
         )
     multipart_plans: list[SplitPlan] = []
     youtube_uploaded_this_cycle = False
@@ -857,6 +876,26 @@ def process_ready_recording(
                     state_store.mark_playlist_added(video_path, platform)
             elif platform == "youtube":
                 youtube_uploaded_this_cycle = True
+        except (MemoryError, MemoryPressureError) as exc:
+            message = (
+                str(exc)
+                if isinstance(exc, MemoryPressureError)
+                else "Python raised MemoryError during the upload"
+            )
+            _mark_exception_failed(
+                state_store,
+                video_path,
+                platform,
+                MemoryPressureError(message),
+            )
+            # Drop cyclic exception/HTTP objects before returning control to the
+            # watcher. The failed platform is retried in a later polling cycle.
+            gc.collect()
+            logger.critical(
+                "Stopping the current recording cycle after memory pressure: %s",
+                message,
+            )
+            raise MemoryPressureError(message) from exc
         except Exception as exc:
             _mark_exception_failed(state_store, video_path, platform, exc)
 
@@ -914,6 +953,19 @@ def process_readiness_results(
             process_ready_recording(
                 video_path, result.metadata, duration, config, state_store, uploaders
             )
+        except MemoryPressureError as exc:
+            logger.warning(
+                "Memory pressure paused the remaining recordings in this scan: %s",
+                exc,
+            )
+            break
+        except MemoryError:
+            gc.collect()
+            logger.critical(
+                "Python raised MemoryError outside an uploader; remaining "
+                "recordings in this scan were postponed"
+            )
+            break
         except Exception:
             logger.exception("Unexpected error while processing a ready recording")
 
@@ -969,6 +1021,8 @@ def run(config: Config, *, once: bool = False) -> int:
             config.paths.recordings_root,
         )
     stop_event = threading.Event()
+    memory_guard = MemoryGuard(config.memory)
+    memory_guard.log_snapshot()
 
     for signal_name in ("SIGINT", "SIGTERM"):
         if hasattr(signal, signal_name):
@@ -980,12 +1034,20 @@ def run(config: Config, *, once: bool = False) -> int:
     logger.info("Opening publisher state database: %s", config.paths.database)
     with StateStore(config.paths.database) as store:
         logger.info("Publisher state database is ready")
-        uploaders = build_uploaders(config, store, stop_event)
+        uploaders = build_uploaders(config, store, stop_event, memory_guard)
         tracker = FileSizeStabilityTracker(config.watcher.size_stability_seconds)
         try:
             while not stop_event.is_set():
                 try:
                     run_cycle(config, store, tracker, uploaders)
+                except MemoryPressureError as exc:
+                    logger.warning("Cycle paused by memory guard: %s", exc)
+                except MemoryError:
+                    gc.collect()
+                    logger.critical(
+                        "Cycle stopped after Python MemoryError; waiting for the "
+                        "next polling interval instead of restarting immediately"
+                    )
                 except Exception:
                     # A complete scan failure (for example a temporary disk error)
                     # must not terminate the long-running process.

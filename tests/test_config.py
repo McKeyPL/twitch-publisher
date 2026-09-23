@@ -67,6 +67,10 @@ class ConfigValidationTests(unittest.TestCase):
     def test_returns_typed_config(self) -> None:
         config = config_from_dict(valid_raw_config())
         self.assertEqual(config.watcher.poll_interval_seconds, 30.0)
+        self.assertTrue(config.memory.enabled)
+        self.assertEqual(config.memory.minimum_commit_headroom_gb, 16.0)
+        self.assertEqual(config.memory.minimum_physical_available_gb, 4.0)
+        self.assertEqual(config.memory.browser_reserve_mb, 2048.0)
         self.assertEqual(config.paths.recordings_root, Path(r"E:\TwitchRecordings"))
         self.assertEqual(config.platforms.youtube.category_id, "20")
         self.assertEqual(config.platforms.youtube.captions_language, "pl")
@@ -127,6 +131,31 @@ class ConfigValidationTests(unittest.TestCase):
         raw["watcher"]["poll_interval_seconds"] = 0
         with self.assertRaisesRegex(ConfigError, "poll_interval_seconds"):
             config_from_dict(raw)
+
+    def test_rejects_non_positive_memory_guard_values(self) -> None:
+        for field_name in (
+            "minimum_commit_headroom_gb",
+            "minimum_physical_available_gb",
+            "check_interval_seconds",
+            "youtube_reserve_mb",
+            "browser_reserve_mb",
+            "split_reserve_mb",
+        ):
+            with self.subTest(field=field_name):
+                raw = valid_raw_config()
+                raw["memory"][field_name] = 0
+                with self.assertRaisesRegex(ConfigError, field_name):
+                    config_from_dict(raw)
+
+    def test_old_config_without_memory_section_gets_safe_defaults(self) -> None:
+        raw = valid_raw_config()
+        del raw["memory"]
+
+        config = config_from_dict(raw)
+
+        self.assertTrue(config.memory.enabled)
+        self.assertEqual(config.memory.minimum_commit_headroom_gb, 16.0)
+        self.assertEqual(config.memory.browser_reserve_mb, 2048.0)
 
     def test_rejects_non_positive_browser_file_size_limit(self) -> None:
         raw = valid_raw_config()

@@ -205,6 +205,42 @@ The original MKV/SRT/TXT set is moved to `_uploaded` only after all required
 platforms and all parts are `SUCCESS` or a legal `SKIPPED`. Work parts are then
 removed unless `splitting.keep_parts_after_success` is enabled.
 
+## Memory safety and process isolation
+
+VOD bytes are streamed with memory bounded independently of file size. YouTube
+uses a 50 MiB resumable stream slice, CDA/Rumble pass only a local path to the
+Playwright browser process, and FFmpeg writes lossless parts directly to disk.
+The publisher never calls `read()`/`read_bytes()` for an MKV. Immediate retry is
+disabled for both Python `MemoryError` and the proactive memory guard so a second
+large browser/HTTP allocation is not created while the host is already under
+pressure.
+
+On Windows the guard reads system-wide committed bytes and commit limit through
+`GetPerformanceInfo`; it does not mistake Task Manager's Available RAM for commit
+headroom. The default policy keeps 16 GiB commit headroom plus a fixed transient
+reserve (256 MiB for YouTube, 2 GiB for a Playwright upload, 1 GiB for FFmpeg)
+and at least 4 GiB physically available. A failed preflight closes the active
+session, stores `FAILED`, stops the rest of that scan, and permits a later watcher
+cycle to retry after pressure falls.
+
+```yaml
+memory:
+  enabled: true
+  minimum_commit_headroom_gb: 16
+  minimum_physical_available_gb: 4
+  check_interval_seconds: 5
+  youtube_reserve_mb: 256
+  browser_reserve_mb: 2048
+  split_reserve_mb: 1024
+```
+
+`start.ps1` starts only `main.py`; no recording program is launched or embedded
+in this interpreter. If a recorder and publisher fail together, investigate the
+host commit limit or an external supervisor. A fixed 1 GiB pagefile is a very
+small safety margin for a Hyper-V host; the guard is not a substitute for a
+system-managed or deliberately capacity-planned pagefile. See
+`MEMORY_AUDIT.md` for the verified code-path audit.
+
 Relevant configuration:
 
 ```yaml
