@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Callable, Sequence
 
 from config import Config, load_config
+from memory_guard import MemoryGuard, MemoryPressureError, mebibytes
 from state import StateStore
 from youtube_copyright.service import CopyrightGuardService
 from youtube_copyright.state import CopyrightStateStore
@@ -74,10 +75,13 @@ def run(
 ) -> int:
     configure_logging(config)
     logger.info(
-        "Copyright Guard started independently: mode=%s, once=%s, explicit_videos=%d",
+        "Copyright Guard started independently: mode=%s, once=%s, "
+        "explicit_videos=%d, browser_trace=%s, screenshots=%s",
         config.youtube_copyright.mode,
         once,
         len(video_ids),
+        config.youtube_copyright.browser.trace_mode,
+        config.youtube_copyright.browser.screenshots,
     )
     removed = prune_diagnostics(config.youtube_copyright.diagnostics)
     if removed:
@@ -88,6 +92,8 @@ def run(
     if not config.platforms.youtube.enabled:
         logger.error("YouTube platform must be enabled for copyright monitoring")
         return 2
+    memory_guard = MemoryGuard(config.memory)
+    memory_guard.log_snapshot()
 
     stop_event = threading.Event()
     shutdown_complete = threading.Event()
@@ -129,6 +135,7 @@ def run(
                     copyright_store,
                     quota_store,
                     stop_event=stop_event,
+                    memory_guard=memory_guard,
                 )
                 while not stop_event.is_set():
                     try:
@@ -164,6 +171,19 @@ def run(
                                 "Pruned %d expired copyright diagnostic runs",
                                 len(removed),
                             )
+                    except MemoryPressureError as exc:
+                        logger.warning(
+                            "Copyright cycle postponed by memory guard: %s", exc
+                        )
+                        if once:
+                            return 1
+                    except MemoryError:
+                        logger.critical(
+                            "Copyright cycle stopped after Python MemoryError; "
+                            "waiting for the next scheduled cycle"
+                        )
+                        if once:
+                            return 1
                     except Exception:
                         logger.exception(
                             "Copyright guard cycle failed; the next cycle will retry"
@@ -206,6 +226,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--browser-debug", action="store_true")
     parser.add_argument(
+        "--browser-trace",
+        action="store_true",
+        help="Record a memory-intensive Playwright trace for short reproduction",
+    )
+    parser.add_argument(
         "--login",
         action="store_true",
         help="Open a visible browser and create/refresh the YouTube Studio session",
@@ -220,6 +245,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.dry_run:
         copyright_config = replace(copyright_config, mode="dry_run")
     if args.browser_debug:
+        copyright_config = replace(
+            copyright_config,
+            browser=replace(
+                copyright_config.browser,
+                headless=False,
+                screenshots=True,
+                console_logging=True,
+                failed_request_logging=True,
+            ),
+        )
+    if args.browser_trace:
         copyright_config = replace(
             copyright_config,
             browser=replace(
@@ -273,6 +309,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         manager = StudioBrowserManager(
             config.youtube_copyright.browser,
             config.youtube_copyright.diagnostics,
+            memory_guard=MemoryGuard(config.memory),
+            memory_reserve_bytes=mebibytes(config.memory.browser_reserve_mb),
         )
         try:
             with SingleInstanceLock(lock_path):

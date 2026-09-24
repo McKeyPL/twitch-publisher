@@ -31,6 +31,12 @@ non-retriable inside the immediate exponential-backoff loop. The current scan is
 stopped, cyclic exception objects are collected, and SQLite retains `FAILED` so
 a later polling cycle can retry after pressure falls.
 
+Browser debug and Playwright tracing are separate. Debug keeps bounded event/DOM
+logging and periodic screenshots; tracing is off by default in both the publisher
+and Copyright Guard. Legacy `on_error` is treated as `off`, because Playwright
+would otherwise need to record the pre-error history continuously. Only an
+explicit short `always`/`--browser-trace` reproduction starts the recorder.
+
 ## Commit-aware guard
 
 On Windows, `memory_guard.py` calls `GetPerformanceInfo` and evaluates:

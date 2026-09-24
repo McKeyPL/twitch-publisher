@@ -4,6 +4,7 @@ param(
     [switch]$Once,
     [switch]$DryRun,
     [switch]$BrowserDebug,
+    [switch]$BrowserTrace,
     [switch]$Login,
     [switch]$ChannelOnly,
     [string[]]$VideoId = @(),
@@ -50,6 +51,7 @@ while ($true) {
     if ($Once) { $arguments += "--once" }
     if ($DryRun) { $arguments += "--dry-run" }
     if ($BrowserDebug) { $arguments += "--browser-debug" }
+    if ($BrowserTrace) { $arguments += "--browser-trace" }
     if ($Login) { $arguments += "--login" }
     if ($ChannelOnly) { $arguments += "--channel-only" }
     foreach ($id in $VideoId) { $arguments += @("--video-id", $id) }

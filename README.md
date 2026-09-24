@@ -56,6 +56,7 @@ Copy-Item .env.example .env
 .\start.ps1
 .\start.ps1 -Once
 .\start.ps1 -BrowserDebug
+.\start.ps1 -BrowserDebug -BrowserTrace  # short reproduction only
 ```
 
 `start.ps1` activates the existing virtual environment, warns when `.env` is
@@ -102,6 +103,7 @@ Start and stop the Linux process manually:
 ./start.sh
 ./start.sh --once
 ./start.sh --browser-debug
+./start.sh --browser-debug --browser-trace  # short reproduction only
 ./start.sh --config config.yaml --restart-delay 15
 ```
 
@@ -321,8 +323,14 @@ for file movement after every other enabled platform has reached `SUCCESS` or
 ## Debugging and cancellation
 
 Use `--browser-debug` or `-BrowserDebug` to display the browser and collect safe
-diagnostics. Screenshots and Playwright traces are written under
-`logs/browser_debug`. Traces may contain session details and request URLs; never
+console/DOM diagnostics plus periodic screenshots under `logs/browser_debug`.
+This mode no longer starts Playwright tracing. A trace records continuously until
+the browser context closes and can retain substantial snapshots in RAM during a
+multi-hour upload.
+
+Only for a short reproduction, add `--browser-trace` or `-BrowserTrace`. Startup
+logs always show `browser_debug` and `browser_trace`, and an active trace emits a
+prominent warning. Traces may contain session details and request URLs; never
 publish or commit them.
 
 Ctrl+C is checked during long waits and uploads. If a platform accepted a form but
@@ -394,7 +402,7 @@ Studio browser profile language set to English; claims URLs also enforce `hl=en`
 Run the three supplied reference videos without the final irreversible click:
 
 ```powershell
-.\start-copyright-guard.ps1 -Once -DryRun -BrowserDebug `
+.\start-copyright-guard.ps1 -Once -DryRun -BrowserDebug -BrowserTrace `
   -VideoId b7uH35WAR2U,Z__dHxFC0PQ,xWmvEX0oCj4
 ```
 
@@ -423,11 +431,12 @@ single-video action has produced the expected Studio result:
 .\start-copyright-guard.ps1 -BrowserDebug
 ```
 
-The checked-in defaults use `trace_mode: on_error` and disable standalone
-screenshots so a long-running guard does not accumulate a full trace for every
-successful two-hour inspection. Add `-BrowserDebug` to the PowerShell launcher
-(or `--browser-debug` to `copyright_guard.py`) for temporary always-on traces,
-screenshots, a visible browser, and browser event logs. If Google expires the
+The checked-in defaults use `trace_mode: off` and disable standalone screenshots.
+`-BrowserDebug` enables a visible browser, screenshots, and browser event logs but
+does not enable tracing. Add `-BrowserTrace` (or `--browser-trace`) only for a
+short reproduction. Legacy `on_error` remains accepted so old configuration
+files load, but it is treated as `off`: saving pre-error history would otherwise
+require the same continuous RAM buffering as `always`. If Google expires the
 session, affected videos receive `AUTH_REQUIRED`; run `-Login` again.
 
 Only one guard instance can own `data/youtube_copyright_guard.lock`. Ctrl+C uses an

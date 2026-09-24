@@ -142,6 +142,7 @@ class BrowserConfig:
     headless: bool
     interactive_login_headless: bool
     debug: bool = False
+    trace_enabled: bool = False
     debug_directory: Path = Path("logs/browser_debug")
     debug_screenshot_interval_seconds: float = 300.0
 
@@ -666,6 +667,9 @@ def config_from_dict(raw: Mapping[str, Any]) -> Config:
                 "browser.interactive_login_headless",
             ),
             debug=_boolean(browser.get("debug", False), "browser.debug"),
+            trace_enabled=_boolean(
+                browser.get("trace_enabled", False), "browser.trace_enabled"
+            ),
             debug_directory=_path(
                 browser.get("debug_directory", "logs/browser_debug"),
                 "browser.debug_directory",

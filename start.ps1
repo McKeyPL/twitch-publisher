@@ -3,6 +3,7 @@ param(
     [string]$Config = "config.yaml",
     [switch]$Once,
     [switch]$BrowserDebug,
+    [switch]$BrowserTrace,
     [ValidateRange(1, 3600)]
     [int]$RestartDelaySeconds = 10,
     [Parameter(ValueFromRemainingArguments = $true)]
@@ -58,6 +59,9 @@ while ($true) {
     }
     if ($BrowserDebug) {
         $pythonArguments += "--browser-debug"
+    }
+    if ($BrowserTrace) {
+        $pythonArguments += "--browser-trace"
     }
     $pythonArguments += $ForwardedArguments
 

@@ -100,6 +100,10 @@ browser:
   interactive_login_headless: false
   # Overridden by the --browser-debug CLI option.
   debug: false
+  # Playwright tracing records continuously until the context closes and can
+  # consume substantial RAM during multi-hour uploads. Enable only temporarily
+  # with --browser-trace / -BrowserTrace.
+  trace_enabled: false
   debug_directory: logs/browser_debug
   debug_screenshot_interval_seconds: 300
 
@@ -129,9 +133,9 @@ youtube_copyright:
     executable_path: ${YOUTUBE_STUDIO_BROWSER_PATH:-}
     headless: false
     locale: en-US
-    # Normal operation keeps a full trace only when Studio automation fails.
-    # Use --browser-debug for temporary always-on traces and screenshots.
-    trace_mode: on_error # off | on_error | always
+    # Only always records a trace. Legacy on_error is accepted but treated as off
+    # because pre-error history would require continuous RAM buffering.
+    trace_mode: "off" # off | legacy on_error | always; quote YAML bool-like words
     screenshots: false
     console_logging: true
     failed_request_logging: true

@@ -6,6 +6,7 @@ CONFIG="config.yaml"
 ONCE=false
 DRY_RUN=false
 BROWSER_DEBUG=false
+BROWSER_TRACE=false
 LOGIN=false
 CHANNEL_ONLY=false
 RESTART_DELAY=10
@@ -20,6 +21,7 @@ Usage: ./start-copyright-guard.sh [options]
   --once
   --dry-run
   --browser-debug
+  --browser-trace           Record a heavy Playwright trace temporarily
   --login
   --channel-only            Ignore local publisher records; scan channel uploads
   --video-id ID             May be repeated
@@ -34,6 +36,7 @@ while (($#)); do
         --once) ONCE=true; shift ;;
         --dry-run) DRY_RUN=true; shift ;;
         --browser-debug) BROWSER_DEBUG=true; shift ;;
+        --browser-trace) BROWSER_TRACE=true; shift ;;
         --login) LOGIN=true; shift ;;
         --channel-only) CHANNEL_ONLY=true; shift ;;
         --video-id) VIDEO_IDS+=("$2"); shift 2 ;;
@@ -68,6 +71,7 @@ while true; do
     $ONCE && args+=(--once)
     $DRY_RUN && args+=(--dry-run)
     $BROWSER_DEBUG && args+=(--browser-debug)
+    $BROWSER_TRACE && args+=(--browser-trace)
     $LOGIN && args+=(--login)
     $CHANNEL_ONLY && args+=(--channel-only)
     for id in "${VIDEO_IDS[@]}"; do args+=(--video-id "$id"); done

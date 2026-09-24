@@ -11,6 +11,7 @@ from typing import Any, Iterable
 from zoneinfo import ZoneInfo
 
 from config import Config
+from memory_guard import MemoryGuard, MemoryPressureError, mebibytes
 from state import StateStore
 from youtube_api import YouTubeApiClient
 
@@ -57,11 +58,13 @@ class CopyrightGuardService:
         *,
         api_service: Any | None = None,
         stop_event: threading.Event | None = None,
+        memory_guard: MemoryGuard | None = None,
     ) -> None:
         self.config = config
         self.copyright_store = copyright_store
         self.quota_store = quota_store
         self.stop_event = stop_event or threading.Event()
+        self.memory_guard = memory_guard or MemoryGuard(config.memory)
         service = api_service or YouTubeApiClient(config.platforms.youtube).get_service()
         self.api = YouTubeCopyrightApi(service, self._reserve_quota)
 
@@ -287,6 +290,8 @@ class CopyrightGuardService:
         manager = StudioBrowserManager(
             self.config.youtube_copyright.browser,
             self.config.youtube_copyright.diagnostics,
+            memory_guard=self.memory_guard,
+            memory_reserve_bytes=mebibytes(self.config.memory.browser_reserve_mb),
         )
         action_record: CopyrightAction | None = None
         diagnostic: Any | None = None
@@ -556,6 +561,23 @@ class CopyrightGuardService:
                 next_check_at=next_check,
             )
             raise
+        except (MemoryError, MemoryPressureError) as exc:
+            message = (
+                str(exc)
+                if isinstance(exc, MemoryPressureError)
+                else "Python raised MemoryError during Studio automation"
+            )
+            self.copyright_store.update_video_state(
+                video_id,
+                VideoState.FAILED,
+                last_error=message,
+                next_check_at=next_check,
+            )
+            logger.critical(
+                "Stopping the Copyright Guard cycle after memory pressure: %s",
+                message,
+            )
+            raise MemoryPressureError(message) from exc
         except Exception as exc:
             self._save_failure_diagnostic(
                 diagnostic, video_id, action_record, exc

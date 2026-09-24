@@ -85,8 +85,9 @@ twitch-publisher/
 - `uploaders/rumble.py` does not treat the visible second step as transfer
   completion. It waits for the `#video[]` token set after all chunks are uploaded
   and merged.
-- Browser uploaders save traces only after failures and check cancellation at
-  intervals no longer than one second during long waits.
+- Browser debug mode writes bounded logs/screenshots without tracing. Heavy
+  Playwright traces require a separate explicit flag and emit a RAM warning.
+  Cancellation is checked at intervals no longer than one second during waits.
 - `mover.py` operates only after every required platform reaches a terminal
   successful status.
 - `cleanup.py` is an independent, manually invoked command with dry-run enabled by

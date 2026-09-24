@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from config import load_config
+from memory_guard import MemoryPressureError
 from state import StateStore
 from youtube_copyright.models import VideoState
 from youtube_copyright.models import ActionState, RemediationAction
@@ -112,6 +116,34 @@ def test_missing_video_is_recorded_without_crashing_other_items(tmp_path: Path) 
         )
         assert result.missing_video_ids == ("missing",)
         assert copyright_store.get_video("missing").state is VideoState.FAILED
+
+
+def test_memory_pressure_stops_guard_cycle_instead_of_opening_more_videos(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    config = replace(
+        config,
+        youtube_copyright=replace(config.youtube_copyright, mode="automatic"),
+    )
+    api_service = _service_for([_resource("blocked", {"allowed": []})])
+    manager = MagicMock()
+    manager.open.side_effect = MemoryPressureError("low commit")
+
+    with (
+        StateStore(config.paths.database) as quota_store,
+        CopyrightStateStore(config.paths.database) as copyright_store,
+        patch("youtube_copyright.service.StudioBrowserManager", return_value=manager),
+        pytest.raises(MemoryPressureError, match="low commit"),
+    ):
+        CopyrightGuardService(
+            config,
+            copyright_store,
+            quota_store,
+            api_service=api_service,
+        ).run_cycle(video_ids=["blocked"], include_channel_uploads=False)
+
+    manager.open.assert_called_once()
 
 
 def test_channel_only_inventory_ignores_stale_publisher_video_ids(

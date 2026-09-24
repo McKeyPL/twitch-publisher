@@ -3,7 +3,12 @@ from __future__ import annotations
 from http.cookiejar import Cookie
 from pathlib import Path
 
-from auth.browser_session import AuthenticatedBrowserSession, _to_playwright_cookie
+from auth.browser_session import (
+    AuthenticatedBrowserSession,
+    BrowserSessionManager,
+    _to_playwright_cookie,
+)
+from config import BrowserConfig
 
 
 def test_converts_firefox_cookie_to_playwright_format() -> None:
@@ -22,7 +27,11 @@ def test_converts_firefox_cookie_to_playwright_format() -> None:
 
 class FakeTracing:
     def __init__(self) -> None:
+        self.start_calls = []
         self.stop_calls = []
+
+    def start(self, **kwargs) -> None:
+        self.start_calls.append(kwargs)
 
     def stop(self, **kwargs) -> None:
         self.stop_calls.append(kwargs)
@@ -95,3 +104,41 @@ def test_interrupted_session_does_not_package_trace(tmp_path: Path) -> None:
         pass
 
     assert context.tracing.stop_calls == [{}]
+
+
+def test_browser_debug_does_not_implicitly_start_heavy_trace(tmp_path: Path) -> None:
+    manager = BrowserSessionManager(
+        BrowserConfig(
+            firefox_profile_path=None,
+            headless=True,
+            interactive_login_headless=False,
+            debug=True,
+            trace_enabled=False,
+            debug_directory=tmp_path,
+        )
+    )
+    context = FakeContext()
+
+    assert manager._prepare_context(context, "cda") is None
+    assert context.tracing.start_calls == []
+
+
+def test_explicit_browser_trace_starts_without_source_capture(tmp_path: Path) -> None:
+    manager = BrowserSessionManager(
+        BrowserConfig(
+            firefox_profile_path=None,
+            headless=True,
+            interactive_login_headless=False,
+            debug=True,
+            trace_enabled=True,
+            debug_directory=tmp_path,
+        )
+    )
+    context = FakeContext()
+
+    trace_path = manager._prepare_context(context, "cda")
+
+    assert trace_path is not None
+    assert context.tracing.start_calls == [
+        {"screenshots": True, "snapshots": True, "sources": False}
+    ]

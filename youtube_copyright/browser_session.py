@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from config import CopyrightBrowserConfig, CopyrightDiagnosticsConfig
+from memory_guard import MemoryGuard
 
 from .diagnostics import DiagnosticRun, safe_url
 
@@ -98,9 +99,14 @@ class StudioBrowserManager:
         self,
         browser_config: CopyrightBrowserConfig,
         diagnostics_config: CopyrightDiagnosticsConfig,
+        *,
+        memory_guard: MemoryGuard | None = None,
+        memory_reserve_bytes: int = 0,
     ) -> None:
         self.browser_config = browser_config
         self.diagnostics_config = diagnostics_config
+        self.memory_guard = memory_guard
+        self.memory_reserve_bytes = memory_reserve_bytes
 
     def open(
         self,
@@ -108,6 +114,12 @@ class StudioBrowserManager:
         *,
         video_id: str | None = None,
     ) -> StudioBrowserSession:
+        if self.memory_guard is not None:
+            self.memory_guard.ensure_safe(
+                "YouTube Studio Copyright Guard browser",
+                reserve_bytes=self.memory_reserve_bytes,
+                force=True,
+            )
         if sync_playwright is None:
             raise StudioBrowserError(
                 "Playwright is unavailable; install requirements and Chromium"
@@ -145,9 +157,25 @@ class StudioBrowserManager:
             context.set_default_navigation_timeout(
                 self.browser_config.navigation_timeout_seconds * 1000
             )
-            if self.browser_config.trace_mode != "off":
-                context.tracing.start(screenshots=True, snapshots=True, sources=True)
+            if self.browser_config.trace_mode == "on_error":
+                logger.warning(
+                    "trace_mode=on_error is deprecated and treated as off because "
+                    "capturing pre-error history requires continuous RAM buffering; "
+                    "use --browser-trace for a short explicit reproduction"
+                )
+            if self.browser_config.trace_mode == "always":
+                context.tracing.start(
+                    screenshots=True,
+                    snapshots=True,
+                    sources=False,
+                )
                 trace_path = diagnostic.path("trace", ".zip")
+                logger.warning(
+                    "YouTube Studio Playwright trace is ACTIVE (mode=%s). It "
+                    "records continuously in memory until this video session "
+                    "closes; use only for short diagnostics.",
+                    self.browser_config.trace_mode,
+                )
             page = context.pages[0] if context.pages else context.new_page()
             self._attach_logging(page, run_id, video_id)
             page.goto(STUDIO_HOME, wait_until="domcontentloaded")

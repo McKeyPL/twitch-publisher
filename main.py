@@ -1009,10 +1009,13 @@ def run(config: Config, *, once: bool = False) -> int:
         if getattr(config.platforms, name).enabled
     ]
     logger.info(
-        "Publisher started: recordings_root=%s, platforms=%s, once=%s",
+        "Publisher started: recordings_root=%s, platforms=%s, once=%s, "
+        "browser_debug=%s, browser_trace=%s",
         config.paths.recordings_root,
         ",".join(enabled_platforms) or "none",
         once,
+        config.browser.debug,
+        config.browser.trace_enabled,
     )
     if not config.paths.recordings_root.is_dir():
         logger.error(
@@ -1067,7 +1070,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--browser-debug",
         action="store_true",
-        help="Show the Playwright window and capture diagnostic traces/screenshots",
+        help="Show Playwright and capture logs/screenshots without heavy tracing",
+    )
+    parser.add_argument(
+        "--browser-trace",
+        action="store_true",
+        help="Temporarily record a memory-intensive Playwright trace",
     )
     return parser
 
@@ -1079,6 +1087,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         config = replace(
             config,
             browser=replace(config.browser, debug=True, headless=False),
+        )
+    if args.browser_trace:
+        config = replace(
+            config,
+            browser=replace(
+                config.browser,
+                debug=True,
+                trace_enabled=True,
+                headless=False,
+            ),
         )
     return run(config, once=args.once)
 

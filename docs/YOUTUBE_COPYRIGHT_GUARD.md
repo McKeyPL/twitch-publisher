@@ -56,10 +56,14 @@ browser, then confirms closure in the console. The guard waits for the profile l
 to be released before launching Playwright with the same dedicated profile and
 verifying authentication. Normal remediation never types Google credentials.
 
-The initial burn-in runs headful and stores traces, screenshots, browser console
-messages, failed requests, parsed claim data, decisions, and confirmation evidence
-under `logs/youtube_copyright`. These files can contain session data and must never
-be committed or shared without review.
+The initial burn-in runs headful and stores screenshots, browser console messages,
+failed requests, parsed claim data, decisions, and confirmation evidence under
+`logs/youtube_copyright`. Add `--browser-trace` only to a short reproduction that
+specifically needs a Playwright trace. Tracing records continuously in memory.
+Legacy `on_error` is accepted for configuration compatibility but treated as
+`off`; only explicit `always`/`--browser-trace` starts the recorder. Diagnostic
+files can contain session data and must never be committed or shared without
+review.
 
 ## Captions
 

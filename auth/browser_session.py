@@ -233,15 +233,16 @@ class BrowserSessionManager:
         return profile / "cookies.sqlite" if profile.is_dir() else profile
 
     def _prepare_context(self, context: Any, platform_name: str) -> Path | None:
-        if not self.config.debug:
+        if not self.config.trace_enabled:
             return None
         debug_directory = self.config.debug_directory
         debug_directory.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         trace_path = debug_directory / f"{platform_name}_{timestamp}_trace.zip"
-        context.tracing.start(screenshots=True, snapshots=True, sources=True)
-        logger.info(
-            "%s: Playwright tracing enabled; the archive is saved only on error -> %s",
+        context.tracing.start(screenshots=True, snapshots=True, sources=False)
+        logger.warning(
+            "%s: Playwright tracing is ACTIVE and records continuously in memory; "
+            "use it only for a short reproduction. Archive on error -> %s",
             platform_name,
             trace_path,
         )

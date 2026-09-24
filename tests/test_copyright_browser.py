@@ -18,6 +18,7 @@ from youtube_copyright.diagnostics import (
     safe_component,
     safe_url,
 )
+from memory_guard import MemoryPressureError
 
 
 def _browser_config(tmp_path: Path, *, trace_mode: str = "always"):
@@ -87,6 +88,45 @@ def test_opens_authenticated_persistent_session_and_saves_trace(tmp_path: Path) 
     context.tracing.stop.assert_called_once_with(path=str(trace_path))
     page.goto.assert_called_once()
     playwright.stop.assert_called_once()
+
+
+@pytest.mark.parametrize("trace_mode", ["off", "on_error"])
+def test_safe_trace_modes_do_not_start_or_stop_tracing(
+    tmp_path: Path,
+    trace_mode: str,
+) -> None:
+    starter, playwright, context, page = _playwright_fixture()
+    manager = StudioBrowserManager(
+        _browser_config(tmp_path, trace_mode=trace_mode), _diagnostics(tmp_path)
+    )
+    with patch("youtube_copyright.browser_session.sync_playwright", return_value=starter):
+        session = manager.open("run-no-trace", video_id="abc")
+        assert session.trace_path is None
+        session.close(success=True)
+
+    context.tracing.start.assert_not_called()
+    context.tracing.stop.assert_not_called()
+    playwright.stop.assert_called_once()
+
+
+def test_memory_guard_runs_before_studio_browser_is_started(tmp_path: Path) -> None:
+    memory_guard = MagicMock()
+    memory_guard.ensure_safe.side_effect = MemoryPressureError("low commit")
+    manager = StudioBrowserManager(
+        _browser_config(tmp_path, trace_mode="off"),
+        _diagnostics(tmp_path),
+        memory_guard=memory_guard,
+        memory_reserve_bytes=123,
+    )
+
+    with pytest.raises(MemoryPressureError, match="low commit"):
+        manager.open("run-low-memory", video_id="abc")
+
+    memory_guard.ensure_safe.assert_called_once_with(
+        "YouTube Studio Copyright Guard browser",
+        reserve_bytes=123,
+        force=True,
+    )
 
 
 def test_manual_login_uses_regular_browser_then_verifies_profile(

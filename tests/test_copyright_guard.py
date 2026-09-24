@@ -34,3 +34,12 @@ def test_retry_reset_video_option_is_repeatable() -> None:
 
 def test_channel_only_option_is_explicit() -> None:
     assert build_parser().parse_args(["--channel-only"]).channel_only
+
+
+def test_browser_debug_and_trace_are_separate_options() -> None:
+    debug_only = build_parser().parse_args(["--browser-debug"])
+    trace = build_parser().parse_args(["--browser-trace"])
+
+    assert debug_only.browser_debug is True
+    assert debug_only.browser_trace is False
+    assert trace.browser_trace is True

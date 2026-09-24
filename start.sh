@@ -5,6 +5,7 @@ PROJECT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG="config.yaml"
 ONCE=false
 BROWSER_DEBUG=false
+BROWSER_TRACE=false
 RESTART_DELAY_SECONDS=10
 CHILD_PID=""
 
@@ -26,6 +27,7 @@ Options:
   --config PATH             Configuration file (default: config.yaml)
   --once                    Run one watcher cycle without restarting
   --browser-debug           Show Playwright and capture diagnostics
+  --browser-trace           Also record a heavy Playwright trace temporarily
   --restart-delay SECONDS   Delay after an unexpected failure (default: 10)
   -h, --help                Show this help
 EOF
@@ -44,6 +46,10 @@ while (($#)); do
             ;;
         --browser-debug)
             BROWSER_DEBUG=true
+            shift
+            ;;
+        --browser-trace)
+            BROWSER_TRACE=true
             shift
             ;;
         --restart-delay)
@@ -107,6 +113,7 @@ while true; do
     python_args=(main.py --config "$CONFIG")
     $ONCE && python_args+=(--once)
     $BROWSER_DEBUG && python_args+=(--browser-debug)
+    $BROWSER_TRACE && python_args+=(--browser-trace)
 
     .venv/bin/python "${python_args[@]}" &
     CHILD_PID=$!
