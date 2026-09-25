@@ -38,6 +38,7 @@ from uploaders.cda import CDAUploader
 from uploaders.rumble import RumbleUploader, _is_file_size_limit_error
 from uploaders.youtube import YouTubeUploader
 from watcher import scan_cycle
+from youtube_copyright.process_lock import GuardAlreadyRunning, SingleInstanceLock
 
 
 logger = logging.getLogger(__name__)
@@ -1098,7 +1099,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 headless=False,
             ),
         )
-    return run(config, once=args.once)
+    lock_path = config.paths.database.parent / "twitch_publisher.lock"
+    try:
+        with SingleInstanceLock(lock_path, owner_name="Twitch Publisher"):
+            return run(config, once=args.once)
+    except GuardAlreadyRunning as exc:
+        print(f"[ERROR] {exc}", file=sys.stderr)
+        return 3
 
 
 if __name__ == "__main__":  # pragma: no cover

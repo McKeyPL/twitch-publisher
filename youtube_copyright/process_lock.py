@@ -12,8 +12,9 @@ class GuardAlreadyRunning(RuntimeError):
 
 
 class SingleInstanceLock:
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, owner_name: str = "YouTube Copyright Guard") -> None:
         self.path = path
+        self.owner_name = owner_name
         self._stream: Any | None = None
 
     def __enter__(self) -> "SingleInstanceLock":
@@ -37,7 +38,7 @@ class SingleInstanceLock:
             self._stream.close()
             self._stream = None
             raise GuardAlreadyRunning(
-                f"Another YouTube Copyright Guard owns {self.path}"
+                f"Another {self.owner_name} owns {self.path}"
             ) from exc
         return self
 

@@ -90,7 +90,9 @@ Eight GiB is therefore a supported low-memory target for one publisher process,
 not an unconditional guarantee for an arbitrary loaded host. Avoid explicit
 Playwright tracing, do not run Copyright Guard concurrently, and provide a modest
 pagefile for commit elasticity. The publisher itself handles only one recording
-and one platform upload at a time.
+and one platform upload at a time. A single-instance lock in the database
+directory also prevents an accidental second publisher from doubling the browser
+cost.
 
 ## Temporary files
 

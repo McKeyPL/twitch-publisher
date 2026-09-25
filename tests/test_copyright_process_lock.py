@@ -13,3 +13,11 @@ def test_single_instance_lock_rejects_second_owner(tmp_path: Path) -> None:
                 pass
     with SingleInstanceLock(lock_path):
         pass
+
+
+def test_single_instance_lock_reports_custom_owner(tmp_path: Path) -> None:
+    lock_path = tmp_path / "publisher.lock"
+    with SingleInstanceLock(lock_path, owner_name="Twitch Publisher"):
+        with pytest.raises(GuardAlreadyRunning, match="Another Twitch Publisher"):
+            with SingleInstanceLock(lock_path, owner_name="Twitch Publisher"):
+                pass

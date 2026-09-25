@@ -247,10 +247,10 @@ VOD. Do not disable the guard to make a constrained host pass; add pagefile/comm
 capacity or stop other workloads if the adaptive check still blocks the upload.
 
 The publisher processes recordings and platforms sequentially, so one publisher
-process owns at most one active upload browser. Do not run a second publisher or
-the standalone Copyright Guard at the same time on an 8 GiB server. Copyright
-Guard is intentionally a separate process and can otherwise add a second Chromium
-process tree.
+process owns at most one active upload browser. A cross-platform lock rejects a
+second publisher process using the same database directory. Do not run the
+standalone Copyright Guard at the same time on an 8 GiB server: Copyright Guard
+is intentionally a separate process and can add a second Chromium process tree.
 
 `start.ps1` starts only `main.py`; no recording program is launched or embedded
 in this interpreter. If a recorder and publisher fail together, investigate the
