@@ -85,6 +85,30 @@ def _cda_upload_response_error(response: object) -> str | None:
     return None
 
 
+def _cda_upload_request_summary(request: object) -> str | None:
+    """Return non-secret transfer metadata without touching the request body."""
+
+    url = str(getattr(request, "url", ""))
+    if not _is_cda_upload_endpoint(url):
+        return None
+    headers = getattr(request, "headers", {})
+    if callable(headers):
+        try:
+            headers = headers()
+        except Exception:
+            headers = {}
+    normalized = {
+        str(name).casefold(): str(value)
+        for name, value in (headers.items() if isinstance(headers, dict) else ())
+    }
+    safe_headers = ", ".join(
+        f"{name}={normalized[name]}"
+        for name in ("content-length", "content-range", "content-type")
+        if name in normalized
+    ) or "no transfer-size headers"
+    return f"{getattr(request, 'method', 'request')} {url}; {safe_headers}"
+
+
 def _clear_cda_stale_uploads(
     page: object,
     *,
@@ -765,6 +789,7 @@ class CDAUploader(BaseUploader):
             )
 
             upload_failures: list[str] = []
+            upload_request_count = 0
 
             def remember_failure(message: str) -> None:
                 message = message.strip()
@@ -785,6 +810,21 @@ class CDAUploader(BaseUploader):
                 remember_failure(
                     f"{getattr(request, 'method', 'request')} {url}{suffix}"
                 )
+
+            def on_request(request: object) -> None:
+                nonlocal upload_request_count
+                summary = _cda_upload_request_summary(request)
+                if summary is None:
+                    return
+                upload_request_count += 1
+                # Capture the protocol shape without flooding logs for a
+                # high-chunk-count resumable upload. Never inspect post_data.
+                if upload_request_count <= 5 or upload_request_count % 50 == 0:
+                    logger.info(
+                        "cda: upload request #%d: %s",
+                        upload_request_count,
+                        summary,
+                    )
 
             def on_console(message: object) -> None:
                 text = str(getattr(message, "text", ""))
@@ -809,6 +849,7 @@ class CDAUploader(BaseUploader):
                 # small local buffer lets the transfer wait loop fail immediately
                 # instead of treating a visible metadata form as completion.
                 page_on("requestfailed", on_request_failed)
+                page_on("request", on_request)
                 page_on("console", on_console)
                 page_on("response", on_response)
 

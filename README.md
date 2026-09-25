@@ -252,6 +252,17 @@ second publisher process using the same database directory. Do not run the
 standalone Copyright Guard at the same time on an 8 GiB server: Copyright Guard
 is intentionally a separate process and can add a second Chromium process tree.
 
+During every long upload or split, memory attribution is logged at a bounded
+30-second interval. The line reports system commit headroom, total private bytes
+for the publisher process tree (Python, Playwright Node driver, and its browser).
+At a guard failure, a fresh attribution line is forced. Comparing this bounded
+tree total with system commit distinguishes publisher growth from another host
+workload without scanning or pausing every process. It does so without
+logging process command lines or secrets. The CDA uploader also logs the first
+five and then every fiftieth transfer request with only `Content-Length`,
+`Content-Range`, and `Content-Type`; cookies, authorization, request bodies, and
+file contents are never read or logged.
+
 `start.ps1` starts only `main.py`; no recording program is launched or embedded
 in this interpreter. If a recorder and publisher fail together, investigate the
 host commit limit or an external supervisor. A fixed 1 GiB pagefile is a very

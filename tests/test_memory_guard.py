@@ -113,6 +113,62 @@ def test_snapshot_reads_are_rate_limited() -> None:
     assert calls == 1
 
 
+def test_process_attribution_is_logged_at_bounded_interval(caplog) -> None:
+    clock = [10.0]
+    reports = 0
+    snapshot = MemorySnapshot(50 * GIB, 140 * GIB, 20 * GIB, "test")
+
+    def report() -> str:
+        nonlocal reports
+        reports += 1
+        return "publisher tree private bytes=0.50 GiB"
+
+    guard = MemoryGuard(
+        memory_config(),
+        snapshot_provider=lambda: snapshot,
+        process_report_provider=report,
+        monotonic=lambda: clock[0],
+    )
+    with caplog.at_level("INFO"):
+        guard.ensure_safe("cda upload")
+        clock[0] = 20.0
+        guard.ensure_safe("cda upload")
+        clock[0] = 41.0
+        guard.ensure_safe("cda upload")
+
+    assert reports == 2
+    assert caplog.text.count("Memory telemetry during cda upload") == 2
+
+
+def test_process_attribution_is_forced_when_pressure_crosses_threshold(caplog) -> None:
+    clock = [10.0]
+    reports = 0
+    snapshots = [
+        MemorySnapshot(100 * GIB, 140 * GIB, 20 * GIB, "test"),
+        MemorySnapshot(139 * GIB, 140 * GIB, 20 * GIB, "test"),
+    ]
+
+    def report() -> str:
+        nonlocal reports
+        reports += 1
+        return "firefox.exe[123]=8.00 GiB"
+
+    guard = MemoryGuard(
+        memory_config(check_interval_seconds=1),
+        snapshot_provider=lambda: snapshots.pop(0),
+        process_report_provider=report,
+        monotonic=lambda: clock[0],
+    )
+    guard.ensure_safe("cda upload")
+    clock[0] = 12.0
+    with caplog.at_level("WARNING"), pytest.raises(MemoryPressureError):
+        guard.ensure_safe("cda upload")
+
+    assert reports == 2
+    assert "Memory attribution at pressure threshold" in caplog.text
+    assert "firefox.exe[123]=8.00 GiB" in caplog.text
+
+
 class FailingUploader(BaseUploader):
     @property
     def platform_name(self) -> str:

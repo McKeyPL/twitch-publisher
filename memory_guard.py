@@ -18,10 +18,16 @@ from typing import Callable
 
 from config import MemoryConfig
 
+try:
+    import psutil
+except ImportError:  # pragma: no cover - launcher installs requirements.txt
+    psutil = None  # type: ignore[assignment]
+
 
 logger = logging.getLogger(__name__)
 GIB = 1024**3
 MIB = 1024**2
+MEMORY_TELEMETRY_INTERVAL_SECONDS = 30.0
 
 
 class MemoryPressureError(RuntimeError):
@@ -120,6 +126,43 @@ def format_bytes(value: int | None) -> str:
     return f"{value / GIB:.2f} GiB"
 
 
+def _private_bytes(process: object) -> int:
+    info = getattr(process, "memory_info")()
+    # Windows exposes committed private bytes as ``private``. RSS is the best
+    # portable fallback and is explicitly labelled in the report.
+    return int(getattr(info, "private", getattr(info, "rss", 0)))
+
+
+def process_memory_report() -> str:
+    """Describe publisher-family memory without reading command lines."""
+
+    if psutil is None:
+        return "process attribution unavailable (psutil is not installed)"
+    try:
+        current = psutil.Process()
+        family_by_pid = {current.pid: current}
+        for child in current.children(recursive=True):
+            family_by_pid[child.pid] = child
+
+        family_rows: list[tuple[int, str, int]] = []
+        for process in family_by_pid.values():
+            try:
+                family_rows.append((process.pid, process.name(), _private_bytes(process)))
+            except (psutil.AccessDenied, psutil.NoSuchProcess, OSError):
+                continue
+        family_rows.sort(key=lambda row: row[2], reverse=True)
+        family_total = sum(row[2] for row in family_rows)
+        family = ", ".join(
+            f"{name}[{pid}]={format_bytes(size)}"
+            for pid, name, size in family_rows
+        ) or "none"
+
+        metric = "private bytes" if os.name == "nt" else "RSS"
+        return f"publisher tree {metric}={format_bytes(family_total)} ({family})"
+    except Exception as exc:  # pragma: no cover - emergency diagnostics only
+        return f"process attribution failed: {exc}"
+
+
 class MemoryGuard:
     """Rate-limited host-memory preflight used before and during long operations."""
 
@@ -128,14 +171,17 @@ class MemoryGuard:
         config: MemoryConfig,
         *,
         snapshot_provider: Callable[[], MemorySnapshot] = system_memory_snapshot,
+        process_report_provider: Callable[[], str] = process_memory_report,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         self.config = config
         self._snapshot_provider = snapshot_provider
+        self._process_report_provider = process_report_provider
         self._monotonic = monotonic
         self._last_checked_at: float | None = None
         self._last_snapshot: MemorySnapshot | None = None
         self._monitoring_warning_logged = False
+        self._last_telemetry_at: float | None = None
 
     def _snapshot(self, *, force: bool) -> MemorySnapshot | None:
         if not self.config.enabled:
@@ -217,6 +263,22 @@ class MemoryGuard:
         if snapshot is None:
             return None
 
+        now = self._monotonic()
+        telemetry_due = (
+            self._last_telemetry_at is None
+            or now - self._last_telemetry_at >= MEMORY_TELEMETRY_INTERVAL_SECONDS
+        )
+        if telemetry_due:
+            logger.info(
+                "Memory telemetry during %s: commit headroom=%s, physical "
+                "available=%s; %s",
+                operation,
+                format_bytes(snapshot.commit_available_bytes),
+                format_bytes(snapshot.physical_available_bytes),
+                self._process_report_provider(),
+            )
+            self._last_telemetry_at = now
+
         minimum_commit = self._minimum_commit_headroom(snapshot)
         required_commit = minimum_commit + reserve_bytes
         minimum_physical = self._minimum_physical_available(snapshot)
@@ -237,6 +299,12 @@ class MemoryGuard:
                 f"is below required {format_bytes(minimum_physical)}"
             )
         if problems:
+            if not telemetry_due:
+                logger.warning(
+                    "Memory attribution at pressure threshold during %s: %s",
+                    operation,
+                    self._process_report_provider(),
+                )
             raise MemoryPressureError(
                 f"Memory guard stopped {operation}: {'; '.join(problems)}. "
                 "No VOD data was intentionally buffered; increase host/pagefile "

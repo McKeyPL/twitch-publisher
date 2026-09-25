@@ -77,6 +77,22 @@ Playwright `set_input_files(path)` passes `localPaths` to the local browser rath
 than converting the file to a payload. Only a remote Playwright connection uses
 the file-stream-copy branch.
 
+A controlled Windows test with a 4 GiB sparse file, local `XMLHttpRequest` plus
+`FormData`, and a deliberately slow receiver increased system commit by only
+about 0.1 GiB after 20 seconds in both Playwright Firefox and installed Chrome.
+That rules out `set_input_files(path)` and ordinary browser multipart upload as
+an automatic VOD-sized allocation. A production drop in system commit still
+needs process attribution: it may come from CDA-specific JavaScript, Firefox, a
+Hyper-V worker, or another host service.
+
+`memory_guard.py` therefore emits bounded 30-second process telemetry during
+operations and forces another report when a threshold is crossed. It reports
+only PID, executable name, and private-byte/RSS totals for the publisher process
+tree. Comparing that value with system commit separates publisher/browser growth
+from unrelated host workloads without a costly all-process scan. CDA transfer-request
+diagnostics log only safe size/type headers and never inspect `post_data`, cookies,
+authorization, or the VOD body.
+
 ## 8 GiB operating boundary
 
 The code path is bounded by a fixed process/browser budget rather than VOD size,

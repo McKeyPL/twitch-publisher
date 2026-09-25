@@ -11,6 +11,7 @@ from config import BrowserConfig, BrowserPlatformConfig, RetryConfig
 from uploaders.cda import (
     CDAUploader,
     _cda_upload_response_error,
+    _cda_upload_request_summary,
     _cda_result_url,
     _clear_cda_stale_uploads,
     _dismiss_cda_consent_overlay,
@@ -66,6 +67,26 @@ def test_missing_video_returns_failure_without_opening_browser(tmp_path: Path) -
     result = uploader.upload(tmp_path / "missing.mkv", "Title", "Description", [])
     assert result.success is False
     assert "does not exist" in (result.error_message or "")
+
+
+def test_cda_upload_request_summary_exposes_only_safe_transfer_headers() -> None:
+    class Request:
+        url = "https://upload-api.cda.pl/uploader"
+        method = "POST"
+        headers = {
+            "content-length": "8388608",
+            "content-range": "bytes 0-8388607/16159887360",
+            "content-type": "application/octet-stream",
+            "cookie": "must-not-be-logged",
+            "authorization": "must-not-be-logged",
+        }
+
+    summary = _cda_upload_request_summary(Request())
+
+    assert summary is not None
+    assert "8388608" in summary
+    assert "content-range" in summary
+    assert "must-not-be-logged" not in summary
 
 
 def test_rumble_requires_explicit_license_before_opening_browser(tmp_path: Path) -> None:
