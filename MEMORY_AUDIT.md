@@ -46,13 +46,60 @@ On Windows, `memory_guard.py` calls `GetPerformanceInfo` and evaluates:
 - physical pages currently available.
 
 This is intentionally not based on Task Manager's Available RAM alone. Before
-and during an upload/split, the process requires the configured fixed headroom
-plus an operation-specific transient reserve. The reserve never scales with VOD
-size. Linux uses `/proc/meminfo` (`Committed_AS`, `CommitLimit`, and
-`MemAvailable`) for equivalent CI and server behavior.
+and during an upload/split, the process requires the larger of a configured
+absolute floor and a percentage of host capacity, plus an operation-specific
+transient reserve. The reserve never scales with VOD size. The default commit
+floor is `max(0.75 GiB, 10% of CommitLimit)` and the physical floor is
+`max(0.75 GiB, 2% of physical RAM)`. Linux uses `/proc/meminfo`
+(`Committed_AS`, `CommitLimit`, `MemAvailable`, and `MemTotal`) for equivalent CI
+and server behavior.
 
 If counters cannot be read, the guard logs one warning and fails open so an
 unsupported operating system is not permanently blocked.
+
+## Measured fixed browser cost
+
+A Windows snapshot with Playwright 1.61.0, headless Firefox 151, and the CDA
+uploader page loaded measured the complete newly-created Python/Node/Firefox tree
+at approximately 736 MiB working set and 667 MiB private bytes (10 processes).
+The publisher import without a browser measured approximately 65 MiB working set
+and 45 MiB private bytes. These are one-machine snapshots, not hard upper bounds;
+active page JavaScript, browser updates, authentication state, and diagnostics can
+increase them. The default 1.5 GiB browser reserve is intentionally above the
+observed idle-uploader footprint.
+
+The browser must remain alive during CDA/Rumble transfer because the HTML file
+input, page JavaScript, progress state, and final publication controls are owned
+by that browser context. Replacing it with direct HTTP would require depending on
+undocumented platform endpoints, CSRF/session details, and resumable-upload
+semantics. It is not necessary to achieve file-size-independent memory use: local
+Playwright `set_input_files(path)` passes `localPaths` to the local browser rather
+than converting the file to a payload. Only a remote Playwright connection uses
+the file-stream-copy branch.
+
+## 8 GiB operating boundary
+
+The code path is bounded by a fixed process/browser budget rather than VOD size,
+so there is no RAM-based maximum such as "works up to a 4 GiB file". A 50 GiB VOD
+still needs platform acceptance and sufficient disk space/time, but not 50 GiB of
+RAM. With the default adaptive policy, an 8 GiB/no-pagefile host must have about
+2.3 GiB commit headroom before CDA/Rumble starts. If the operating system and
+other services leave less than that, the guard intentionally refuses the upload.
+
+Eight GiB is therefore a supported low-memory target for one publisher process,
+not an unconditional guarantee for an arbitrary loaded host. Avoid explicit
+Playwright tracing, do not run Copyright Guard concurrently, and provide a modest
+pagefile for commit elasticity. The publisher itself handles only one recording
+and one platform upload at a time.
+
+## Temporary files
+
+FFmpeg `-c copy` segmentation writes normal files below `_publisher_work`; it does
+not use `SpooledTemporaryFile`, a RAM disk, or an in-memory pipe for media bytes.
+The disk-space preflight requires roughly the source size times the configured
+multiplier. Parts are retained after a failed/incomplete multipart upload so it
+can resume without splitting again, then removed after every required platform
+and YouTube finalization succeeds unless `keep_parts_after_success` is enabled.
 
 ## Process isolation conclusion
 

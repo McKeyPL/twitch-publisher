@@ -219,22 +219,38 @@ pressure.
 
 On Windows the guard reads system-wide committed bytes and commit limit through
 `GetPerformanceInfo`; it does not mistake Task Manager's Available RAM for commit
-headroom. The default policy keeps 16 GiB commit headroom plus a fixed transient
-reserve (256 MiB for YouTube, 2 GiB for a Playwright upload, 1 GiB for FFmpeg)
-and at least 4 GiB physically available. A failed preflight closes the active
-session, stores `FAILED`, stops the rest of that scan, and permits a later watcher
-cycle to retry after pressure falls.
+headroom. The default policy uses the larger of an absolute floor and a percentage
+of the host capacity. It therefore keeps roughly 10% of commit capacity free on a
+large Hyper-V host without making an 8 GiB server satisfy a 16 GiB absolute floor.
+Fixed transient reserves are 256 MiB for YouTube, 1.5 GiB for a Playwright upload,
+and 512 MiB for FFmpeg. A failed preflight closes the active session, stores
+`FAILED`, stops the rest of that scan, and permits a later watcher cycle to retry
+after pressure falls.
 
 ```yaml
 memory:
   enabled: true
-  minimum_commit_headroom_gb: 16
-  minimum_physical_available_gb: 4
+  minimum_commit_headroom_gb: 0.75
+  minimum_commit_headroom_percent: 10
+  minimum_physical_available_gb: 0.75
+  minimum_physical_available_percent: 2
   check_interval_seconds: 5
   youtube_reserve_mb: 256
-  browser_reserve_mb: 2048
-  split_reserve_mb: 1024
+  browser_reserve_mb: 1536
+  split_reserve_mb: 512
 ```
+
+On an 8 GiB machine with an 8 GiB commit limit, a browser upload therefore starts
+only when at least about 2.3 GiB of commit headroom remains: 0.8 GiB (10%) plus
+the 1.5 GiB browser reserve. This threshold does not change for a 2 GiB or 50 GiB
+VOD. Do not disable the guard to make a constrained host pass; add pagefile/commit
+capacity or stop other workloads if the adaptive check still blocks the upload.
+
+The publisher processes recordings and platforms sequentially, so one publisher
+process owns at most one active upload browser. Do not run a second publisher or
+the standalone Copyright Guard at the same time on an 8 GiB server. Copyright
+Guard is intentionally a separate process and can otherwise add a second Chromium
+process tree.
 
 `start.ps1` starts only `main.py`; no recording program is launched or embedded
 in this interpreter. If a recorder and publisher fail together, investigate the

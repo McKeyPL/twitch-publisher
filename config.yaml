@@ -13,16 +13,19 @@ watcher:
   size_stability_seconds: 60
 
 # The Windows guard uses system commit (Committed Bytes / Commit Limit), not
-# merely Task Manager's Available RAM. Reserves are bounded transient budgets;
-# they are deliberately independent of VOD file size because uploads stream.
+# merely Task Manager's Available RAM. The larger of the absolute and percentage
+# floors protects both an 8 GiB server and a large Hyper-V host. Operation
+# reserves are bounded budgets independent of VOD file size because uploads stream.
 memory:
   enabled: true
-  minimum_commit_headroom_gb: 16
-  minimum_physical_available_gb: 4
+  minimum_commit_headroom_gb: 0.75
+  minimum_commit_headroom_percent: 10
+  minimum_physical_available_gb: 0.75
+  minimum_physical_available_percent: 2
   check_interval_seconds: 5
   youtube_reserve_mb: 256
-  browser_reserve_mb: 2048
-  split_reserve_mb: 1024
+  browser_reserve_mb: 1536
+  split_reserve_mb: 512
 
 platforms:
   youtube:

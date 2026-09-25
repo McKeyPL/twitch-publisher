@@ -68,9 +68,11 @@ class ConfigValidationTests(unittest.TestCase):
         config = config_from_dict(valid_raw_config())
         self.assertEqual(config.watcher.poll_interval_seconds, 30.0)
         self.assertTrue(config.memory.enabled)
-        self.assertEqual(config.memory.minimum_commit_headroom_gb, 16.0)
-        self.assertEqual(config.memory.minimum_physical_available_gb, 4.0)
-        self.assertEqual(config.memory.browser_reserve_mb, 2048.0)
+        self.assertEqual(config.memory.minimum_commit_headroom_gb, 0.75)
+        self.assertEqual(config.memory.minimum_commit_headroom_percent, 10.0)
+        self.assertEqual(config.memory.minimum_physical_available_gb, 0.75)
+        self.assertEqual(config.memory.minimum_physical_available_percent, 2.0)
+        self.assertEqual(config.memory.browser_reserve_mb, 1536.0)
         self.assertEqual(config.paths.recordings_root, Path(r"E:\TwitchRecordings"))
         self.assertEqual(config.platforms.youtube.category_id, "20")
         self.assertEqual(config.platforms.youtube.captions_language, "pl")
@@ -136,7 +138,9 @@ class ConfigValidationTests(unittest.TestCase):
     def test_rejects_non_positive_memory_guard_values(self) -> None:
         for field_name in (
             "minimum_commit_headroom_gb",
+            "minimum_commit_headroom_percent",
             "minimum_physical_available_gb",
+            "minimum_physical_available_percent",
             "check_interval_seconds",
             "youtube_reserve_mb",
             "browser_reserve_mb",
@@ -155,8 +159,20 @@ class ConfigValidationTests(unittest.TestCase):
         config = config_from_dict(raw)
 
         self.assertTrue(config.memory.enabled)
-        self.assertEqual(config.memory.minimum_commit_headroom_gb, 16.0)
-        self.assertEqual(config.memory.browser_reserve_mb, 2048.0)
+        self.assertEqual(config.memory.minimum_commit_headroom_gb, 0.75)
+        self.assertEqual(config.memory.minimum_commit_headroom_percent, 10.0)
+        self.assertEqual(config.memory.browser_reserve_mb, 1536.0)
+
+    def test_rejects_memory_percent_above_one_hundred(self) -> None:
+        for field_name in (
+            "minimum_commit_headroom_percent",
+            "minimum_physical_available_percent",
+        ):
+            with self.subTest(field=field_name):
+                raw = valid_raw_config()
+                raw["memory"][field_name] = 100.1
+                with self.assertRaisesRegex(ConfigError, field_name):
+                    config_from_dict(raw)
 
     def test_rejects_non_positive_browser_file_size_limit(self) -> None:
         raw = valid_raw_config()

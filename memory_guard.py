@@ -34,6 +34,7 @@ class MemorySnapshot:
     commit_limit_bytes: int | None
     physical_available_bytes: int | None
     source: str
+    physical_total_bytes: int | None = None
 
     @property
     def commit_available_bytes(self) -> int | None:
@@ -80,6 +81,7 @@ def _windows_memory_snapshot() -> MemorySnapshot:
         commit_limit_bytes=int(information.CommitLimit) * page_size,
         physical_available_bytes=int(information.PhysicalAvailable) * page_size,
         source="Windows GetPerformanceInfo",
+        physical_total_bytes=int(information.PhysicalTotal) * page_size,
     )
 
 
@@ -100,6 +102,7 @@ def _linux_memory_snapshot() -> MemorySnapshot:
         commit_limit_bytes=commit_limit,
         physical_available_bytes=values.get("MemAvailable"),
         source="Linux /proc/meminfo",
+        physical_total_bytes=values.get("MemTotal"),
     )
 
 
@@ -166,14 +169,38 @@ class MemoryGuard:
             return None
         logger.info(
             "Memory guard: commit used=%s, limit=%s, headroom=%s, "
-            "physical available=%s (%s)",
+            "physical available=%s; adaptive floors: commit=%s, physical=%s (%s)",
             format_bytes(snapshot.commit_used_bytes),
             format_bytes(snapshot.commit_limit_bytes),
             format_bytes(snapshot.commit_available_bytes),
             format_bytes(snapshot.physical_available_bytes),
+            format_bytes(self._minimum_commit_headroom(snapshot)),
+            format_bytes(self._minimum_physical_available(snapshot)),
             snapshot.source,
         )
         return snapshot
+
+    def _minimum_commit_headroom(self, snapshot: MemorySnapshot) -> int:
+        absolute = int(self.config.minimum_commit_headroom_gb * GIB)
+        if snapshot.commit_limit_bytes is None:
+            return absolute
+        proportional = int(
+            snapshot.commit_limit_bytes
+            * self.config.minimum_commit_headroom_percent
+            / 100
+        )
+        return max(absolute, proportional)
+
+    def _minimum_physical_available(self, snapshot: MemorySnapshot) -> int:
+        absolute = int(self.config.minimum_physical_available_gb * GIB)
+        if snapshot.physical_total_bytes is None:
+            return absolute
+        proportional = int(
+            snapshot.physical_total_bytes
+            * self.config.minimum_physical_available_percent
+            / 100
+        )
+        return max(absolute, proportional)
 
     def ensure_safe(
         self,
@@ -190,9 +217,9 @@ class MemoryGuard:
         if snapshot is None:
             return None
 
-        minimum_commit = int(self.config.minimum_commit_headroom_gb * GIB)
+        minimum_commit = self._minimum_commit_headroom(snapshot)
         required_commit = minimum_commit + reserve_bytes
-        minimum_physical = int(self.config.minimum_physical_available_gb * GIB)
+        minimum_physical = self._minimum_physical_available(snapshot)
         problems: list[str] = []
         commit_available = snapshot.commit_available_bytes
         if commit_available is not None and commit_available < required_commit:

@@ -87,7 +87,9 @@ class WatcherConfig:
 class MemoryConfig:
     enabled: bool
     minimum_commit_headroom_gb: float
+    minimum_commit_headroom_percent: float
     minimum_physical_available_gb: float
+    minimum_physical_available_percent: float
     check_interval_seconds: float
     youtube_reserve_mb: float
     browser_reserve_mb: float
@@ -284,6 +286,13 @@ def _fraction(value: Any, location: str) -> float:
     result = _positive_float(value, location)
     if result > 1:
         raise ConfigError(f"{location} must be greater than zero and at most 1")
+    return result
+
+
+def _percentage(value: Any, location: str) -> float:
+    result = _positive_float(value, location)
+    if result > 100:
+        raise ConfigError(f"{location} must be greater than zero and at most 100")
     return result
 
 
@@ -570,12 +579,20 @@ def config_from_dict(raw: Mapping[str, Any]) -> Config:
         memory=MemoryConfig(
             enabled=_boolean(memory.get("enabled", True), "memory.enabled"),
             minimum_commit_headroom_gb=_positive_float(
-                memory.get("minimum_commit_headroom_gb", 16),
+                memory.get("minimum_commit_headroom_gb", 0.75),
                 "memory.minimum_commit_headroom_gb",
             ),
+            minimum_commit_headroom_percent=_percentage(
+                memory.get("minimum_commit_headroom_percent", 10),
+                "memory.minimum_commit_headroom_percent",
+            ),
             minimum_physical_available_gb=_positive_float(
-                memory.get("minimum_physical_available_gb", 4),
+                memory.get("minimum_physical_available_gb", 0.75),
                 "memory.minimum_physical_available_gb",
+            ),
+            minimum_physical_available_percent=_percentage(
+                memory.get("minimum_physical_available_percent", 2),
+                "memory.minimum_physical_available_percent",
             ),
             check_interval_seconds=_positive_float(
                 memory.get("check_interval_seconds", 5),
@@ -586,11 +603,11 @@ def config_from_dict(raw: Mapping[str, Any]) -> Config:
                 "memory.youtube_reserve_mb",
             ),
             browser_reserve_mb=_positive_float(
-                memory.get("browser_reserve_mb", 2048),
+                memory.get("browser_reserve_mb", 1536),
                 "memory.browser_reserve_mb",
             ),
             split_reserve_mb=_positive_float(
-                memory.get("split_reserve_mb", 1024),
+                memory.get("split_reserve_mb", 512),
                 "memory.split_reserve_mb",
             ),
         ),
