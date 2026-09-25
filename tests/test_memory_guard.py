@@ -125,6 +125,7 @@ def test_process_attribution_is_logged_at_bounded_interval(caplog) -> None:
 
     guard = MemoryGuard(
         memory_config(),
+        telemetry_enabled=True,
         snapshot_provider=lambda: snapshot,
         process_report_provider=report,
         monotonic=lambda: clock[0],
@@ -138,6 +139,27 @@ def test_process_attribution_is_logged_at_bounded_interval(caplog) -> None:
 
     assert reports == 2
     assert caplog.text.count("Memory telemetry during cda upload") == 2
+
+
+def test_process_attribution_is_disabled_by_default(caplog) -> None:
+    reports = 0
+    snapshot = MemorySnapshot(50 * GIB, 140 * GIB, 20 * GIB, "test")
+
+    def report() -> str:
+        nonlocal reports
+        reports += 1
+        return "this should not be logged"
+
+    guard = MemoryGuard(
+        memory_config(),
+        snapshot_provider=lambda: snapshot,
+        process_report_provider=report,
+    )
+    with caplog.at_level("INFO"):
+        guard.ensure_safe("cda upload")
+
+    assert reports == 0
+    assert "Memory telemetry during cda upload" not in caplog.text
 
 
 def test_process_attribution_is_forced_when_pressure_crosses_threshold(caplog) -> None:
@@ -155,6 +177,7 @@ def test_process_attribution_is_forced_when_pressure_crosses_threshold(caplog) -
 
     guard = MemoryGuard(
         memory_config(check_interval_seconds=1),
+        telemetry_enabled=True,
         snapshot_provider=lambda: snapshots.pop(0),
         process_report_provider=report,
         monotonic=lambda: clock[0],

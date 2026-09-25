@@ -101,8 +101,13 @@ def build_uploaders(
     state_store: StateStore,
     cancel_event: threading.Event | None = None,
     memory_guard: MemoryGuard | None = None,
+    *,
+    memory_debug: bool = False,
 ) -> dict[str, BaseUploader]:
-    guard = memory_guard or MemoryGuard(config.memory)
+    guard = memory_guard or MemoryGuard(
+        config.memory,
+        telemetry_enabled=memory_debug,
+    )
     uploaders: dict[str, BaseUploader] = {}
     if config.platforms.youtube.enabled:
         uploaders["youtube"] = YouTubeUploader(
@@ -121,6 +126,7 @@ def build_uploaders(
             cancel_event=cancel_event,
             memory_guard=guard,
             memory_reserve_bytes=mebibytes(config.memory.browser_reserve_mb),
+            memory_debug=memory_debug,
         )
     if config.platforms.rumble.enabled:
         uploaders["rumble"] = RumbleUploader(
@@ -130,6 +136,7 @@ def build_uploaders(
             cancel_event=cancel_event,
             memory_guard=guard,
             memory_reserve_bytes=mebibytes(config.memory.browser_reserve_mb),
+            memory_debug=memory_debug,
         )
     return uploaders
 
@@ -1002,7 +1009,12 @@ def run_cycle(
     return results
 
 
-def run(config: Config, *, once: bool = False) -> int:
+def run(
+    config: Config,
+    *,
+    once: bool = False,
+    memory_debug: bool = False,
+) -> int:
     configure_logging(config)
     enabled_platforms = [
         name
@@ -1011,12 +1023,13 @@ def run(config: Config, *, once: bool = False) -> int:
     ]
     logger.info(
         "Publisher started: recordings_root=%s, platforms=%s, once=%s, "
-        "browser_debug=%s, browser_trace=%s",
+        "browser_debug=%s, browser_trace=%s, memory_debug=%s",
         config.paths.recordings_root,
         ",".join(enabled_platforms) or "none",
         once,
         config.browser.debug,
         config.browser.trace_enabled,
+        memory_debug,
     )
     if not config.paths.recordings_root.is_dir():
         logger.error(
@@ -1025,7 +1038,10 @@ def run(config: Config, *, once: bool = False) -> int:
             config.paths.recordings_root,
         )
     stop_event = threading.Event()
-    memory_guard = MemoryGuard(config.memory)
+    memory_guard = MemoryGuard(
+        config.memory,
+        telemetry_enabled=memory_debug,
+    )
     memory_guard.log_snapshot()
 
     for signal_name in ("SIGINT", "SIGTERM"):
@@ -1038,7 +1054,13 @@ def run(config: Config, *, once: bool = False) -> int:
     logger.info("Opening publisher state database: %s", config.paths.database)
     with StateStore(config.paths.database) as store:
         logger.info("Publisher state database is ready")
-        uploaders = build_uploaders(config, store, stop_event, memory_guard)
+        uploaders = build_uploaders(
+            config,
+            store,
+            stop_event,
+            memory_guard,
+            memory_debug=memory_debug,
+        )
         tracker = FileSizeStabilityTracker(config.watcher.size_stability_seconds)
         try:
             while not stop_event.is_set():
@@ -1078,6 +1100,14 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Temporarily record a memory-intensive Playwright trace",
     )
+    parser.add_argument(
+        "--memory-debug",
+        action="store_true",
+        help=(
+            "Log process-memory attribution and browser network diagnostics; "
+            "short reproductions only"
+        ),
+    )
     return parser
 
 
@@ -1102,7 +1132,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     lock_path = config.paths.database.parent / "twitch_publisher.lock"
     try:
         with SingleInstanceLock(lock_path, owner_name="Twitch Publisher"):
-            return run(config, once=args.once)
+            return run(
+                config,
+                once=args.once,
+                memory_debug=args.memory_debug,
+            )
     except GuardAlreadyRunning as exc:
         print(f"[ERROR] {exc}", file=sys.stderr)
         return 3

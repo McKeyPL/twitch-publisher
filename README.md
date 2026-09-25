@@ -56,6 +56,7 @@ Copy-Item .env.example .env
 .\start.ps1
 .\start.ps1 -Once
 .\start.ps1 -BrowserDebug
+.\start.ps1 -MemoryDebug  # short memory/network reproduction only
 .\start.ps1 -BrowserDebug -BrowserTrace  # short reproduction only
 ```
 
@@ -252,16 +253,21 @@ second publisher process using the same database directory. Do not run the
 standalone Copyright Guard at the same time on an 8 GiB server: Copyright Guard
 is intentionally a separate process and can add a second Chromium process tree.
 
-During every long upload or split, memory attribution is logged at a bounded
-30-second interval. The line reports system commit headroom, total private bytes
-for the publisher process tree (Python, Playwright Node driver, and its browser).
-At a guard failure, a fresh attribution line is forced. Comparing this bounded
-tree total with system commit distinguishes publisher growth from another host
-workload without scanning or pausing every process. It does so without
-logging process command lines or secrets. The CDA uploader also logs the first
-five and then every fiftieth transfer request with only `Content-Length`,
-`Content-Range`, and `Content-Type`; cookies, authorization, request bodies, and
-file contents are never read or logged.
+Normal operation logs upload progress but does not subscribe Playwright to every
+network request or print periodic per-process memory attribution. This is
+important for CDA: its JavaScript sends thousands of 3 MiB resumable POSTs, and
+Playwright network-event objects may carry POST data across both the Node and
+Python processes.
+
+Detailed attribution is an explicit diagnostic profile. Start it with
+`start.ps1 -MemoryDebug` on Windows or `./start.sh --memory-debug` on Linux. It
+logs system commit headroom, private bytes for the publisher process tree, and
+the first five then every fiftieth CDA transfer request using only safe size/type
+headers. Cookies and authorization are not logged, and the code never explicitly
+reads a request body. Nevertheless, Playwright may internally retain network
+event payloads, so use this mode only for a short reproduction and stop it before
+memory pressure. `-BrowserDebug` remains suitable for a visible browser,
+screenshots, console output, and DOM diagnostics without network listeners.
 
 `start.ps1` starts only `main.py`; no recording program is launched or embedded
 in this interpreter. If a recorder and publisher fail together, investigate the
@@ -351,9 +357,13 @@ for file movement after every other enabled platform has reached `SUCCESS` or
 
 Use `--browser-debug` or `-BrowserDebug` to display the browser and collect safe
 console/DOM diagnostics plus periodic screenshots under `logs/browser_debug`.
-This mode no longer starts Playwright tracing. A trace records continuously until
-the browser context closes and can retain substantial snapshots in RAM during a
-multi-hour upload.
+This mode starts neither Playwright tracing nor per-request network listeners. A
+trace records continuously until the browser context closes and can retain
+substantial snapshots in RAM during a multi-hour upload.
+
+Use `--memory-debug` or `-MemoryDebug` separately when diagnosing commit growth.
+It is intentionally noisy and can itself increase memory use during a CDA upload;
+it is not a normal publishing mode.
 
 Only for a short reproduction, add `--browser-trace` or `-BrowserTrace`. Startup
 logs always show `browser_debug` and `browser_trace`, and an active trace emits a

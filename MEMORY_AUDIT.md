@@ -80,18 +80,24 @@ the file-stream-copy branch.
 A controlled Windows test with a 4 GiB sparse file, local `XMLHttpRequest` plus
 `FormData`, and a deliberately slow receiver increased system commit by only
 about 0.1 GiB after 20 seconds in both Playwright Firefox and installed Chrome.
-That rules out `set_input_files(path)` and ordinary browser multipart upload as
-an automatic VOD-sized allocation. A production drop in system commit still
-needs process attribution: it may come from CDA-specific JavaScript, Firefox, a
-Hyper-V worker, or another host service.
+That ruled out `set_input_files(path)` and ordinary browser multipart upload as
+an automatic VOD-sized allocation.
 
-`memory_guard.py` therefore emits bounded 30-second process telemetry during
-operations and forces another report when a threshold is crossed. It reports
-only PID, executable name, and private-byte/RSS totals for the publisher process
-tree. Comparing that value with system commit separates publisher/browser growth
-from unrelated host workloads without a costly all-process scan. CDA transfer-request
-diagnostics log only safe size/type headers and never inspect `post_data`, cookies,
-authorization, or the VOD body.
+A later production run identified a different source. CDA sent 3 MiB resumable
+POSTs while always-on Playwright request/response listeners were active. After
+about 3.6 GiB had been transferred, Python private bytes reached 4.16 GiB and the
+Playwright Node driver reached 3.39 GiB, while Firefox remained near 1.3 GiB.
+The growth tracked transferred bytes in both protocol processes. Request and
+response event objects can carry POST data over the Playwright protocol even
+when application code never calls `post_data`.
+
+Normal publisher and visual `BrowserDebug` operation therefore do not subscribe
+to per-request network events. The request sampler and bounded 30-second process
+attribution are enabled only by the explicit `MemoryDebug` profile. That profile
+reports PID, executable name, private-byte/RSS totals, and safe request size/type
+headers without intentionally reading request bodies, cookies, or authorization.
+Because Playwright can still retain event payloads internally, `MemoryDebug` is
+for short reproduction runs only and is not proof of production memory behavior.
 
 ## 8 GiB operating boundary
 

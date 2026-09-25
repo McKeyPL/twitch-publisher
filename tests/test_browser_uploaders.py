@@ -61,6 +61,21 @@ def test_platform_names_and_playlist_support(tmp_path: Path) -> None:
     assert rumble.add_to_playlist("id", "collection") is False
 
 
+def test_browser_network_diagnostics_are_opt_in(tmp_path: Path) -> None:
+    normal = CDAUploader(platform(tmp_path, "cda"), browser(), retry())
+    diagnostic = CDAUploader(
+        platform(tmp_path, "cda"),
+        browser(),
+        retry(),
+        memory_debug=True,
+    )
+
+    assert normal.memory_debug is False
+    assert normal._session_manager.network_debug is False
+    assert diagnostic.memory_debug is True
+    assert diagnostic._session_manager.network_debug is True
+
+
 def test_missing_video_returns_failure_without_opening_browser(tmp_path: Path) -> None:
     uploader = CDAUploader(platform(tmp_path, "cda"), browser(), retry())
     uploader._session_manager = object()

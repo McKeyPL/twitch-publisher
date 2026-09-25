@@ -6,6 +6,7 @@ CONFIG="config.yaml"
 ONCE=false
 BROWSER_DEBUG=false
 BROWSER_TRACE=false
+MEMORY_DEBUG=false
 RESTART_DELAY_SECONDS=10
 CHILD_PID=""
 
@@ -28,6 +29,7 @@ Options:
   --once                    Run one watcher cycle without restarting
   --browser-debug           Show Playwright and capture diagnostics
   --browser-trace           Also record a heavy Playwright trace temporarily
+  --memory-debug            Log detailed memory/network diagnostics temporarily
   --restart-delay SECONDS   Delay after an unexpected failure (default: 10)
   -h, --help                Show this help
 EOF
@@ -50,6 +52,10 @@ while (($#)); do
             ;;
         --browser-trace)
             BROWSER_TRACE=true
+            shift
+            ;;
+        --memory-debug)
+            MEMORY_DEBUG=true
             shift
             ;;
         --restart-delay)
@@ -114,6 +120,7 @@ while true; do
     $ONCE && python_args+=(--once)
     $BROWSER_DEBUG && python_args+=(--browser-debug)
     $BROWSER_TRACE && python_args+=(--browser-trace)
+    $MEMORY_DEBUG && python_args+=(--memory-debug)
 
     .venv/bin/python "${python_args[@]}" &
     CHILD_PID=$!

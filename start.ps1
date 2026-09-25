@@ -4,6 +4,7 @@ param(
     [switch]$Once,
     [switch]$BrowserDebug,
     [switch]$BrowserTrace,
+    [switch]$MemoryDebug,
     [ValidateRange(1, 3600)]
     [int]$RestartDelaySeconds = 10,
     [Parameter(ValueFromRemainingArguments = $true)]
@@ -62,6 +63,9 @@ while ($true) {
     }
     if ($BrowserTrace) {
         $pythonArguments += "--browser-trace"
+    }
+    if ($MemoryDebug) {
+        $pythonArguments += "--memory-debug"
     }
     $pythonArguments += $ForwardedArguments
 

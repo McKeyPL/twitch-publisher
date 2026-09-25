@@ -170,11 +170,13 @@ class MemoryGuard:
         self,
         config: MemoryConfig,
         *,
+        telemetry_enabled: bool = False,
         snapshot_provider: Callable[[], MemorySnapshot] = system_memory_snapshot,
         process_report_provider: Callable[[], str] = process_memory_report,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         self.config = config
+        self.telemetry_enabled = telemetry_enabled
         self._snapshot_provider = snapshot_provider
         self._process_report_provider = process_report_provider
         self._monotonic = monotonic
@@ -264,7 +266,7 @@ class MemoryGuard:
             return None
 
         now = self._monotonic()
-        telemetry_due = (
+        telemetry_due = self.telemetry_enabled and (
             self._last_telemetry_at is None
             or now - self._last_telemetry_at >= MEMORY_TELEMETRY_INTERVAL_SECONDS
         )
@@ -299,7 +301,7 @@ class MemoryGuard:
                 f"is below required {format_bytes(minimum_physical)}"
             )
         if problems:
-            if not telemetry_due:
+            if self.telemetry_enabled and not telemetry_due:
                 logger.warning(
                     "Memory attribution at pressure threshold during %s: %s",
                     operation,

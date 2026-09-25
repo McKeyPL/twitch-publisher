@@ -245,7 +245,8 @@ class RumbleUploader(BaseUploader):
         cancel_event: threading.Event | None = None,
         memory_guard: MemoryGuard | None = None,
         memory_reserve_bytes: int = 0,
-        session_factory: Callable[[BrowserConfig], BrowserSessionManager] = BrowserSessionManager,
+        memory_debug: bool = False,
+        session_factory: Callable[..., BrowserSessionManager] = BrowserSessionManager,
     ) -> None:
         super().__init__(
             retry_config,
@@ -255,7 +256,10 @@ class RumbleUploader(BaseUploader):
         )
         self.config = config
         self.browser_config = browser_config
-        self._session_manager = session_factory(browser_config)
+        self._session_manager = session_factory(
+            browser_config,
+            network_debug=memory_debug,
+        )
         self._last_debug_screenshot = 0.0
 
     def _debug_snapshot(self, page: object, stage: str, *, force: bool = False) -> None:

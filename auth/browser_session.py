@@ -80,8 +80,9 @@ class AuthenticatedBrowserSession:
 class BrowserSessionManager:
     """Open a session using storage state, Firefox cookies, then interactive login."""
 
-    def __init__(self, config: BrowserConfig) -> None:
+    def __init__(self, config: BrowserConfig, *, network_debug: bool = False) -> None:
         self.config = config
+        self.network_debug = network_debug
 
     def open(
         self,
@@ -249,49 +250,58 @@ class BrowserSessionManager:
         return trace_path
 
     def _prepare_page(self, page: Any, platform_name: str) -> None:
-        if not self.config.debug:
+        if not self.config.debug and not self.network_debug:
             return
 
         def safe_url(value: str) -> str:
             parsed = urlparse(value)
             return f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
 
-        page.on(
-            "console",
-            lambda message: logger.info(
-                "%s browser console[%s]: %s",
-                platform_name,
-                message.type,
-                message.text[:1000],
-            ),
-        )
-        page.on(
-            "pageerror",
-            lambda error: logger.error("%s browser pageerror: %s", platform_name, error),
-        )
-        page.on(
-            "requestfailed",
-            lambda request: logger.error(
-                "%s request failed: %s %s (%s)",
-                platform_name,
-                request.method,
-                safe_url(request.url),
-                request.failure,
-            ),
-        )
-        page.on(
-            "response",
-            lambda response: (
-                logger.warning(
-                    "%s HTTP %s: %s",
+        if self.config.debug:
+            page.on(
+                "console",
+                lambda message: logger.info(
+                    "%s browser console[%s]: %s",
                     platform_name,
-                    response.status,
-                    safe_url(response.url),
-                )
-                if response.status >= 400
-                else None
-            ),
-        )
+                    message.type,
+                    message.text[:1000],
+                ),
+            )
+            page.on(
+                "pageerror",
+                lambda error: logger.error(
+                    "%s browser pageerror: %s", platform_name, error
+                ),
+            )
+
+        # Playwright Request/Response objects can carry POST data through the
+        # Python <-> Node protocol. CDA sends thousands of 3 MiB resumable POSTs,
+        # so subscribing to every network event can retain VOD-sized data in both
+        # processes. Keep these listeners out of normal and visual-debug uploads.
+        if self.network_debug:
+            page.on(
+                "requestfailed",
+                lambda request: logger.error(
+                    "%s request failed: %s %s (%s)",
+                    platform_name,
+                    request.method,
+                    safe_url(request.url),
+                    request.failure,
+                ),
+            )
+            page.on(
+                "response",
+                lambda response: (
+                    logger.warning(
+                        "%s HTTP %s: %s",
+                        platform_name,
+                        response.status,
+                        safe_url(response.url),
+                    )
+                    if response.status >= 400
+                    else None
+                ),
+            )
 
     @staticmethod
     def _save_state(context: Any, state_path: Path) -> None:

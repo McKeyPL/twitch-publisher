@@ -695,7 +695,8 @@ class CDAUploader(BaseUploader):
         cancel_event: threading.Event | None = None,
         memory_guard: MemoryGuard | None = None,
         memory_reserve_bytes: int = 0,
-        session_factory: Callable[[BrowserConfig], BrowserSessionManager] = BrowserSessionManager,
+        memory_debug: bool = False,
+        session_factory: Callable[..., BrowserSessionManager] = BrowserSessionManager,
     ) -> None:
         super().__init__(
             retry_config,
@@ -705,7 +706,11 @@ class CDAUploader(BaseUploader):
         )
         self.config = config
         self.browser_config = browser_config
-        self._session_manager = session_factory(browser_config)
+        self.memory_debug = memory_debug
+        self._session_manager = session_factory(
+            browser_config,
+            network_debug=memory_debug,
+        )
         self._last_debug_screenshot = 0.0
 
     def _debug_snapshot(self, page: object, stage: str, *, force: bool = False) -> None:
@@ -844,10 +849,12 @@ class CDAUploader(BaseUploader):
                     remember_failure(error)
 
             page_on = getattr(page, "on", None)
-            if callable(page_on):
-                # BrowserSessionManager already logs these events.  Keeping a
-                # small local buffer lets the transfer wait loop fail immediately
-                # instead of treating a visible metadata form as completion.
+            if self.memory_debug and callable(page_on):
+                logger.warning(
+                    "cda: memory/network diagnostics are active; use this mode "
+                    "only for a short reproduction because Playwright network "
+                    "events can retain upload data"
+                )
                 page_on("requestfailed", on_request_failed)
                 page_on("request", on_request)
                 page_on("console", on_console)
@@ -876,7 +883,11 @@ class CDAUploader(BaseUploader):
                 heartbeat_probe=lambda: self._debug_snapshot(
                     page, "upload_progress"
                 ),
-                failure_probe=lambda: upload_failures[0] if upload_failures else None,
+                failure_probe=(
+                    (lambda: upload_failures[0] if upload_failures else None)
+                    if self.memory_debug
+                    else None
+                ),
             )
             duplicate_url = upload_status.get("duplicate_url")
             success_url = upload_status.get("success_url")

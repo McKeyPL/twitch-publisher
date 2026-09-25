@@ -10,7 +10,13 @@ import pytest
 
 from config import Config, load_config
 from duration_check import ReadinessResult, ReadinessStatus
-from main import _request_stop, process_readiness_results, process_ready_recording
+from main import (
+    _request_stop,
+    build_parser,
+    build_uploaders,
+    process_readiness_results,
+    process_ready_recording,
+)
 from media_splitter import MediaPart, SplitPlan
 from memory_guard import MemoryPressureError
 from meta_parser import StreamMetadata
@@ -49,6 +55,32 @@ class FakeUploader(BaseUploader):
     def add_to_playlist(self, platform_video_id, playlist_identifier, *, playlist_title=None):
         self.playlisted.append(platform_video_id)
         return True
+
+
+def test_memory_debug_is_an_explicit_cli_mode() -> None:
+    normal = build_parser().parse_args([])
+    diagnostic = build_parser().parse_args(["--memory-debug"])
+
+    assert normal.memory_debug is False
+    assert diagnostic.memory_debug is True
+
+
+def test_build_uploaders_keeps_network_and_memory_telemetry_off_by_default(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = config_for(tmp_path, monkeypatch)
+
+    with StateStore(config.paths.database) as store:
+        normal = build_uploaders(config, store)
+        diagnostic = build_uploaders(config, store, memory_debug=True)
+
+    assert normal["cda"].memory_debug is False
+    assert normal["cda"]._session_manager.network_debug is False
+    assert normal["cda"].memory_guard.telemetry_enabled is False
+    assert diagnostic["cda"].memory_debug is True
+    assert diagnostic["cda"]._session_manager.network_debug is True
+    assert diagnostic["cda"].memory_guard.telemetry_enabled is True
 
 
 class CaptionRetryYouTubeUploader(FakeUploader):

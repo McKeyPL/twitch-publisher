@@ -51,6 +51,14 @@ class FakeContext(FakeResource):
         self.tracing = FakeTracing()
 
 
+class FakePage:
+    def __init__(self) -> None:
+        self.events: list[str] = []
+
+    def on(self, event: str, callback) -> None:
+        self.events.append(event)
+
+
 class FakePlaywright:
     def __init__(self) -> None:
         self.stopped = False
@@ -121,6 +129,45 @@ def test_browser_debug_does_not_implicitly_start_heavy_trace(tmp_path: Path) -> 
 
     assert manager._prepare_context(context, "cda") is None
     assert context.tracing.start_calls == []
+
+
+def test_visual_browser_debug_does_not_subscribe_to_network_events(
+    tmp_path: Path,
+) -> None:
+    manager = BrowserSessionManager(
+        BrowserConfig(
+            firefox_profile_path=None,
+            headless=True,
+            interactive_login_headless=False,
+            debug=True,
+            trace_enabled=False,
+            debug_directory=tmp_path,
+        )
+    )
+    page = FakePage()
+
+    manager._prepare_page(page, "cda")
+
+    assert page.events == ["console", "pageerror"]
+
+
+def test_network_events_require_explicit_memory_debug(tmp_path: Path) -> None:
+    manager = BrowserSessionManager(
+        BrowserConfig(
+            firefox_profile_path=None,
+            headless=True,
+            interactive_login_headless=False,
+            debug=False,
+            trace_enabled=False,
+            debug_directory=tmp_path,
+        ),
+        network_debug=True,
+    )
+    page = FakePage()
+
+    manager._prepare_page(page, "cda")
+
+    assert page.events == ["requestfailed", "response"]
 
 
 def test_explicit_browser_trace_starts_without_source_capture(tmp_path: Path) -> None:
