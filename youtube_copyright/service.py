@@ -177,6 +177,14 @@ class CopyrightGuardService:
                     ignored.append(video_id)
                 checked += 1
 
+            if missing:
+                logger.warning(
+                    "YouTube videos.list omitted %d candidate(s); they were marked "
+                    "FAILED and will be checked again next cycle: %s",
+                    len(missing),
+                    ", ".join(missing),
+                )
+
             submitted = 0
             if mode != "report":
                 for candidate_index, video_id in enumerate(actionable):
@@ -292,6 +300,7 @@ class CopyrightGuardService:
             self.config.youtube_copyright.diagnostics,
             memory_guard=self.memory_guard,
             memory_reserve_bytes=mebibytes(self.config.memory.browser_reserve_mb),
+            stop_event=self.stop_event,
         )
         action_record: CopyrightAction | None = None
         diagnostic: Any | None = None
@@ -301,7 +310,17 @@ class CopyrightGuardService:
         try:
             with manager.open(run_id, video_id=video_id) as session:
                 diagnostic = session.diagnostic
-                executor = StudioCopyrightExecutor(session.page, session.diagnostic)
+                executor = StudioCopyrightExecutor(
+                    session.page,
+                    session.diagnostic,
+                    stop_event=self.stop_event,
+                    navigation_timeout_seconds=(
+                        self.config.youtube_copyright.browser.navigation_timeout_seconds
+                    ),
+                    action_timeout_seconds=(
+                        self.config.youtube_copyright.browser.action_timeout_seconds
+                    ),
+                )
                 inspection = executor.inspect(video_id)
                 if inspection.processing:
                     logger.info(
@@ -554,12 +573,18 @@ class CopyrightGuardService:
                         "confirmation was accepted before resetting this action"
                     ),
                 )
-            self.copyright_store.update_video_state(
-                video_id,
-                VideoState.MANUAL_REQUIRED,
-                last_error="Studio action outcome is uncertain after SIGINT",
-                next_check_at=next_check,
-            )
+                self.copyright_store.update_video_state(
+                    video_id,
+                    VideoState.MANUAL_REQUIRED,
+                    last_error="Studio action outcome is uncertain after SIGINT",
+                    next_check_at=next_check,
+                )
+            else:
+                logger.info(
+                    "Copyright Guard was interrupted before creating an action for "
+                    "%s; its current classification is preserved",
+                    video_id,
+                )
             raise
         except (MemoryError, MemoryPressureError) as exc:
             message = (

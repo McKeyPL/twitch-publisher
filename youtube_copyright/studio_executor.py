@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
@@ -44,6 +46,17 @@ _SUBMITTED_MARKERS = _PROCESSING_MARKERS + (
     "changes are being processed",
     "changes saved",
 )
+
+_PERMANENT_EDIT_CHECKBOX_ALIASES = (
+    "i acknowledge that these changes are permanent",
+    "i understand this edit is permanent",
+    "i understand that this edit is permanent",
+    "i acknowledge this edit is permanent",
+)
+
+_WAIT_SLICE_SECONDS = 1.0
+_WAIT_RETRY_DELAY_SECONDS = 0.1
+_WAIT_HEARTBEAT_SECONDS = 15.0
 
 _SUBMISSION_CONFIRMED_SCRIPT = r"""
 markers => {
@@ -122,10 +135,23 @@ class StudioExecutionResult:
 
 
 class StudioCopyrightExecutor:
-    def __init__(self, page: Any, diagnostic: DiagnosticRun) -> None:
+    def __init__(
+        self,
+        page: Any,
+        diagnostic: DiagnosticRun,
+        *,
+        stop_event: threading.Event | None = None,
+        navigation_timeout_seconds: float = 30.0,
+        action_timeout_seconds: float = 30.0,
+    ) -> None:
+        if navigation_timeout_seconds <= 0 or action_timeout_seconds <= 0:
+            raise ValueError("Studio timeout values must be positive")
         self.page = page
         self.diagnostic = diagnostic
         self.parser = StudioClaimParser()
+        self.stop_event = stop_event or threading.Event()
+        self.navigation_timeout_seconds = navigation_timeout_seconds
+        self.action_timeout_seconds = action_timeout_seconds
 
     def inspect(self, video_id: str) -> StudioInspection:
         # Studio automation intentionally targets one stable UI language. Account
@@ -134,26 +160,28 @@ class StudioCopyrightExecutor:
         claim_data_error: Exception | None = None
         claim_data_status: int | None = None
         try:
-            with self.page.expect_response(
-                lambda response: "creator/list_creator_received_claims" in response.url,
-                timeout=30_000,
-            ) as response_info:
-                self.page.goto(url, wait_until="domcontentloaded")
-            claim_data_status = response_info.value.status
-            if claim_data_status >= 400:
-                claim_data_error = StudioAutomationUnavailable(
-                    f"Studio claims request returned HTTP {claim_data_status}"
-                )
+            # Wait only for the initial navigation commit. Polymer and the claims
+            # API continue asynchronously and are handled by the interruptible
+            # readiness loop below. A long page.goto would defer Python SIGINT.
+            self.page.goto(url, wait_until="commit", timeout=1_000)
         except Exception as exc:
             claim_data_error = exc
+        if not self._wait_for_expected_video_url(video_id):
+            raise StudioAutomationUnavailable(
+                f"Studio did not navigate to video {video_id} within "
+                f"{self.navigation_timeout_seconds:.0f} seconds"
+            ) from claim_data_error
         self._validate_video_id(video_id)
         # The response completes shortly before Polymer renders the claim rows.
         self.page.wait_for_timeout(750)
-        try:
-            self.page.wait_for_function(_CLAIM_UI_READY_SCRIPT, timeout=10_000)
-        except Exception:
+        if not self._wait_for_function_interruptibly(
+            _CLAIM_UI_READY_SCRIPT,
+            timeout_seconds=self.navigation_timeout_seconds,
+            description="YouTube Studio claim page",
+        ):
             logger.debug(
-                "Studio claim UI did not expose a terminal element within 10 seconds"
+                "Studio claim UI did not expose a terminal element within %.1f seconds",
+                self.navigation_timeout_seconds,
             )
         processing = self._body_contains(_PROCESSING_MARKERS)
         claims = self.parser.extract(self.page, video_id)
@@ -326,17 +354,25 @@ class StudioCopyrightExecutor:
         final_buttons[0].click()
 
     def _accept_confirmation_checkbox(self) -> bool:
-        """Accept the sole permanent-edit acknowledgement, when Studio shows it."""
+        """Accept the permanent-edit acknowledgement, ignoring unrelated boxes."""
 
-        locator = self.page.get_by_role("checkbox")
-        visible: list[Any] = []
-        for index in range(locator.count()):
-            candidate = locator.nth(index)
-            if candidate.is_visible():
-                visible.append(candidate)
+        named_locator = self.page.get_by_role(
+            "checkbox",
+            name=_pattern(_PERMANENT_EDIT_CHECKBOX_ALIASES),
+            exact=False,
+        )
+        visible = _unique_locators(_visible_candidates(named_locator))
+        if not visible:
+            # Preserve compatibility with an older Studio dialog whose custom
+            # checkbox had no accessible name, but only when it is the sole
+            # visible checkbox. Never guess among channel-page checkboxes.
+            visible = _unique_locators(
+                _visible_candidates(self.page.get_by_role("checkbox"))
+            )
         if len(visible) > 1:
             raise StudioAmbiguousUi(
-                f"Expected at most one edit confirmation checkbox, got {len(visible)}"
+                "Expected one permanent-edit acknowledgement checkbox, but "
+                f"found {len(visible)} ambiguous visible checkboxes"
             )
         if not visible:
             return False
@@ -387,17 +423,94 @@ class StudioCopyrightExecutor:
         return True
 
     def _wait_for_submitted_marker(self) -> None:
-        try:
-            self.page.wait_for_function(
-                _SUBMISSION_CONFIRMED_SCRIPT,
-                list(_SUBMITTED_MARKERS),
-                timeout=30_000,
-            )
-        except Exception as exc:
+        confirmed = self._wait_for_function_interruptibly(
+            _SUBMISSION_CONFIRMED_SCRIPT,
+            argument=list(_SUBMITTED_MARKERS),
+            timeout_seconds=self.action_timeout_seconds,
+            description="Studio edit confirmation",
+        )
+        if not confirmed:
             raise StudioSubmissionUncertain(
                 "Studio did not confirm the result after the irreversible edit "
-                "confirmation was clicked"
-            ) from exc
+                f"confirmation was clicked within {self.action_timeout_seconds:.0f} seconds"
+            )
+
+    def _wait_for_function_interruptibly(
+        self,
+        script: str,
+        *,
+        timeout_seconds: float,
+        description: str,
+        argument: object | None = None,
+    ) -> bool:
+        """Poll Studio in short slices so navigation and Ctrl+C are both safe."""
+
+        deadline = time.monotonic() + timeout_seconds
+        next_heartbeat = time.monotonic() + _WAIT_HEARTBEAT_SECONDS
+        last_error: Exception | None = None
+        while True:
+            self._raise_if_cancelled()
+            now = time.monotonic()
+            remaining = deadline - now
+            if remaining <= 0:
+                if last_error is not None:
+                    logger.debug(
+                        "%s timed out after transient Studio errors: %s",
+                        description,
+                        last_error,
+                    )
+                return False
+            slice_ms = max(
+                1,
+                int(min(_WAIT_SLICE_SECONDS, remaining) * 1000),
+            )
+            try:
+                if argument is None:
+                    self.page.wait_for_function(script, timeout=slice_ms)
+                else:
+                    self.page.wait_for_function(
+                        script,
+                        argument,
+                        timeout=slice_ms,
+                    )
+                return True
+            except KeyboardInterrupt:
+                raise
+            except Exception as exc:
+                # Studio destroys the JavaScript execution context while moving
+                # from the confirmation dialog back to the claims page. That is
+                # a transient navigation state, not a failed submission.
+                last_error = exc
+
+            now = time.monotonic()
+            if now >= next_heartbeat:
+                elapsed = timeout_seconds - max(0.0, deadline - now)
+                logger.info(
+                    "Still waiting for %s (%.0f/%.0f s)",
+                    description,
+                    elapsed,
+                    timeout_seconds,
+                )
+                next_heartbeat = now + _WAIT_HEARTBEAT_SECONDS
+            delay = min(_WAIT_RETRY_DELAY_SECONDS, max(0.0, deadline - now))
+            if delay and self.stop_event.wait(delay):
+                self._raise_if_cancelled()
+
+    def _raise_if_cancelled(self) -> None:
+        if self.stop_event.is_set():
+            raise KeyboardInterrupt("Copyright Guard interrupted by the user")
+
+    def _wait_for_expected_video_url(self, video_id: str) -> bool:
+        deadline = time.monotonic() + self.navigation_timeout_seconds
+        expected = f"/video/{video_id}/"
+        while time.monotonic() < deadline:
+            self._raise_if_cancelled()
+            if expected in str(self.page.url):
+                return True
+            remaining = max(0.0, deadline - time.monotonic())
+            if self.stop_event.wait(min(_WAIT_RETRY_DELAY_SECONDS, remaining)):
+                self._raise_if_cancelled()
+        return False
 
     def _validate_video_id(self, video_id: str) -> None:
         if f"/video/{video_id}/" not in self.page.url:

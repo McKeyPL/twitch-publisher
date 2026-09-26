@@ -146,6 +146,36 @@ def test_memory_pressure_stops_guard_cycle_instead_of_opening_more_videos(
     manager.open.assert_called_once()
 
 
+def test_interrupt_before_studio_action_preserves_video_classification(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    config = replace(
+        config,
+        youtube_copyright=replace(config.youtube_copyright, mode="automatic"),
+    )
+    api_service = _service_for([_resource("blocked", {"allowed": []})])
+    manager = MagicMock()
+    manager.open.side_effect = KeyboardInterrupt
+
+    with (
+        StateStore(config.paths.database) as quota_store,
+        CopyrightStateStore(config.paths.database) as copyright_store,
+        patch("youtube_copyright.service.StudioBrowserManager", return_value=manager),
+        pytest.raises(KeyboardInterrupt),
+    ):
+        CopyrightGuardService(
+            config,
+            copyright_store,
+            quota_store,
+            api_service=api_service,
+        ).run_cycle(video_ids=["blocked"], include_channel_uploads=False)
+
+    with CopyrightStateStore(config.paths.database) as copyright_store:
+        assert copyright_store.get_video("blocked").state is VideoState.GLOBAL_BLOCKED
+        assert copyright_store.latest_action("blocked") is None
+
+
 def test_channel_only_inventory_ignores_stale_publisher_video_ids(
     tmp_path: Path,
 ) -> None:
@@ -255,14 +285,20 @@ def test_automatic_cycle_submits_one_studio_action(tmp_path: Path) -> None:
         StateStore(config.paths.database) as quota_store,
         CopyrightStateStore(config.paths.database) as copyright_store,
         patch("youtube_copyright.service.StudioBrowserManager", return_value=manager),
-        patch("youtube_copyright.service.StudioCopyrightExecutor", return_value=executor),
+        patch(
+            "youtube_copyright.service.StudioCopyrightExecutor",
+            return_value=executor,
+        ) as executor_factory,
     ):
-        result = CopyrightGuardService(
+        guard = CopyrightGuardService(
             config,
             copyright_store,
             quota_store,
             api_service=service_api,
-        ).run_cycle(video_ids=["blocked-video"], include_channel_uploads=False)
+        )
+        result = guard.run_cycle(
+            video_ids=["blocked-video"], include_channel_uploads=False
+        )
         assert result.actions_submitted == 1
         assert copyright_store.get_video("blocked-video").state is VideoState.EDIT_SUBMITTED
         action = copyright_store.latest_action("blocked-video")
@@ -271,6 +307,17 @@ def test_automatic_cycle_submits_one_studio_action(tmp_path: Path) -> None:
         assert action.state is ActionState.SUBMITTED
 
     executor.execute.assert_called_once()
+    executor_factory.assert_called_once_with(
+        browser_session.page,
+        browser_session.diagnostic,
+        stop_event=guard.stop_event,
+        navigation_timeout_seconds=(
+            config.youtube_copyright.browser.navigation_timeout_seconds
+        ),
+        action_timeout_seconds=(
+            config.youtube_copyright.browser.action_timeout_seconds
+        ),
+    )
 
 
 def test_action_limit_counts_submissions_not_processing_candidates(

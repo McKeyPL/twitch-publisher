@@ -195,6 +195,7 @@ def run(
                     stop_event.wait(config.youtube_copyright.interval_hours * 3600)
         except KeyboardInterrupt:
             logger.info("Copyright Guard was interrupted by the user")
+            return 130
         return 0
     finally:
         shutdown_complete.set()

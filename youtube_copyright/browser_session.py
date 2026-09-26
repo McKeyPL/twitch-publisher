@@ -7,6 +7,7 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -102,11 +103,13 @@ class StudioBrowserManager:
         *,
         memory_guard: MemoryGuard | None = None,
         memory_reserve_bytes: int = 0,
+        stop_event: threading.Event | None = None,
     ) -> None:
         self.browser_config = browser_config
         self.diagnostics_config = diagnostics_config
         self.memory_guard = memory_guard
         self.memory_reserve_bytes = memory_reserve_bytes
+        self.stop_event = stop_event or threading.Event()
 
     def open(
         self,
@@ -178,12 +181,15 @@ class StudioBrowserManager:
                 )
             page = context.pages[0] if context.pages else context.new_page()
             self._attach_logging(page, run_id, video_id)
-            page.goto(STUDIO_HOME, wait_until="domcontentloaded")
-            if "accounts.google.com" not in page.url:
-                try:
-                    page.locator("ytcp-app").wait_for(state="attached", timeout=15_000)
-                except Exception:
-                    logger.debug("Studio application shell did not attach within 15 seconds")
+            try:
+                page.goto(STUDIO_HOME, wait_until="commit", timeout=1_000)
+            except Exception as exc:
+                logger.debug(
+                    "Studio home did not commit within one second; continuing the "
+                    "interruptible readiness wait: %s",
+                    exc,
+                )
+            self._wait_until_studio_or_login(page)
             if not self.is_authenticated(page):
                 raise StudioAuthRequired(
                     "YouTube Studio authentication is required; run copyright_guard.py --login"
@@ -211,6 +217,24 @@ class StudioBrowserManager:
                     pass
             playwright.stop()
             raise
+
+    def _wait_until_studio_or_login(self, page: Any) -> None:
+        deadline = time.monotonic() + self.browser_config.navigation_timeout_seconds
+        while time.monotonic() < deadline:
+            if self.stop_event.is_set():
+                raise KeyboardInterrupt("Copyright Guard interrupted by the user")
+            url = str(page.url)
+            if "accounts.google.com" in url or "ServiceLogin" in url:
+                return
+            if self.is_authenticated(page):
+                return
+            remaining = max(0.0, deadline - time.monotonic())
+            if self.stop_event.wait(min(0.1, remaining)):
+                raise KeyboardInterrupt("Copyright Guard interrupted by the user")
+        logger.debug(
+            "Studio application shell did not become ready within %.1f seconds",
+            self.browser_config.navigation_timeout_seconds,
+        )
 
     def login(self, run_id: str = "interactive-login") -> None:
         """Create the Studio profile in a normal browser, then verify it.

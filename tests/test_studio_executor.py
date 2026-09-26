@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import threading
 from pathlib import Path
 
 import pytest
@@ -159,7 +160,10 @@ class FakePage:
         self.body_text = ""
         self.events: list[str] = []
         self.response_error: Exception | None = None
+        self.navigation_error: Exception | None = None
         self.submission_timeout = False
+        self.submission_failures_remaining = 0
+        self.on_submission_wait = None
         self.selectors: dict[str, list[FakeElement]] = {}
 
     def expect_response(self, predicate, **kwargs: object) -> FakeResponseInfo:
@@ -170,6 +174,10 @@ class FakePage:
     def goto(self, url: str, **kwargs: object) -> None:
         self.events.append("goto")
         self.url = url
+        assert kwargs["wait_until"] == "commit"
+        assert kwargs["timeout"] == 1_000
+        if self.navigation_error is not None:
+            raise self.navigation_error
 
     def wait_for_timeout(self, milliseconds: int) -> None:
         self.events.append(f"wait:{milliseconds}")
@@ -177,13 +185,18 @@ class FakePage:
 
     def wait_for_function(self, script: str, *args: object, **kwargs: object) -> None:
         if "ytcr-video-content-list-row" in script:
-            assert kwargs["timeout"] == 10_000
+            assert 0 < kwargs["timeout"] <= 1_000
             self.events.append("wait_for_claim_ui")
             return
         assert "operation in progress" in script.lower()
         assert "video editing is in progress" in args[0]
-        assert kwargs["timeout"] == 30_000
+        assert 0 < kwargs["timeout"] <= 1_000
         self.events.append("wait_for_submission")
+        if self.on_submission_wait is not None:
+            self.on_submission_wait()
+        if self.submission_failures_remaining:
+            self.submission_failures_remaining -= 1
+            raise RuntimeError("Execution context was destroyed during navigation")
         if self.submission_timeout:
             raise TimeoutError("submission marker timed out")
 
@@ -244,12 +257,7 @@ def test_inspection_extracts_claims_and_processing_state(tmp_path: Path) -> None
     assert len(inspection.claims) == 1
     assert inspection.claims[0].claim.start_seconds == 10
     assert page.url.endswith("/video/video123/claims?hl=en")
-    assert page.events[:4] == [
-        "expect_response_enter",
-        "goto",
-        "expect_response_exit",
-        "wait:750",
-    ]
+    assert page.events[:2] == ["goto", "wait:750"]
     assert "wait_for_claim_ui" in page.events
 
 
@@ -272,7 +280,7 @@ def test_inspection_refuses_to_treat_unfinished_claim_request_as_empty(
     tmp_path: Path,
 ) -> None:
     page = FakePage(tmp_path, {})
-    page.response_error = TimeoutError("claim request timed out")
+    page.navigation_error = TimeoutError("claim navigation timed out")
     with pytest.raises(StudioAutomationUnavailable, match="did not finish loading"):
         StudioCopyrightExecutor(page, _diagnostic(tmp_path)).inspect("video123")
 
@@ -450,13 +458,92 @@ def test_missing_marker_after_irreversible_click_has_uncertain_outcome(
     )[0]
 
     with pytest.raises(StudioSubmissionUncertain, match="irreversible"):
-        StudioCopyrightExecutor(page, _diagnostic(tmp_path)).execute(
+        StudioCopyrightExecutor(
+            page,
+            _diagnostic(tmp_path),
+            action_timeout_seconds=0.01,
+        ).execute(
             "video123",
             parsed,
             RemediationAction.ERASE_SONG,
             dry_run=False,
             trace_path=None,
         )
+
+
+def test_submission_wait_survives_transient_navigation_errors(tmp_path: Path) -> None:
+    page = FakePage(
+        tmp_path,
+        {
+            "button": ["Take action", "Erase song"],
+            "menuitem": ["Erase song"],
+        },
+    )
+    page.submission_failures_remaining = 2
+    parsed = StudioClaimParser().parse_rows(
+        "video123",
+        [{"text": "Song\nAudio", "actions": ""}],
+    )[0]
+
+    result = StudioCopyrightExecutor(
+        page,
+        _diagnostic(tmp_path),
+        action_timeout_seconds=2,
+    ).execute(
+        "video123",
+        parsed,
+        RemediationAction.ERASE_SONG,
+        dry_run=False,
+        trace_path=None,
+    )
+
+    assert result.submitted
+    assert page.events.count("wait_for_submission") == 3
+
+
+def test_submission_wait_honours_stop_event_between_playwright_slices(
+    tmp_path: Path,
+) -> None:
+    stop_event = threading.Event()
+    page = FakePage(tmp_path, {})
+    page.submission_timeout = True
+    page.on_submission_wait = stop_event.set
+    executor = StudioCopyrightExecutor(
+        page,
+        _diagnostic(tmp_path),
+        stop_event=stop_event,
+        action_timeout_seconds=60,
+    )
+
+    with pytest.raises(KeyboardInterrupt, match="interrupted"):
+        executor._wait_for_submitted_marker()
+
+    assert page.events.count("wait_for_submission") == 1
+
+
+def test_permanent_acknowledgement_is_selected_among_unrelated_checkboxes(
+    tmp_path: Path,
+) -> None:
+    page = FakePage(
+        tmp_path,
+        {
+            "checkbox": [
+                "Select all claims",
+                "I acknowledge that these changes are permanent",
+                "Send me updates",
+            ]
+        },
+    )
+
+    accepted = StudioCopyrightExecutor(
+        page,
+        _diagnostic(tmp_path),
+    )._accept_confirmation_checkbox()
+
+    assert accepted is True
+    assert page.roles["checkbox"][0].checked is False
+    assert page.roles["checkbox"][1].checked is True
+    assert page.roles["checkbox"][2].checked is False
 
 
 def test_current_erase_flow_saves_before_permanent_edit_confirmation(

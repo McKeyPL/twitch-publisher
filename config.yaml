@@ -142,7 +142,9 @@ youtube_copyright:
     screenshots: false
     console_logging: true
     failed_request_logging: true
+    # Slow Studio routes are polled in short, Ctrl+C-aware slices.
     navigation_timeout_seconds: 60
+    # Final edit confirmation may appear only after Studio reloads the claims page.
     action_timeout_seconds: 600
   diagnostics:
     directory: logs/youtube_copyright

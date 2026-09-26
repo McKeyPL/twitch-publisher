@@ -27,8 +27,10 @@ segment. For visual or audiovisual claims, trim the claimed segment when Studio
 offers that operation. Only one edit may be submitted for a video at a time.
 
 Studio can require one acknowledgement checkbox before the irreversible final
-button. The executor checks it only when exactly one checkbox is visible; multiple
-checkboxes are treated as an ambiguous UI and no edit is submitted.
+button. The executor selects the checkbox by its permanent-edit accessible label,
+so unrelated visible checkboxes on the claims page do not make the dialog
+ambiguous. An unnamed legacy checkbox is accepted only when it is the sole visible
+checkbox.
 
 Trimming is rejected when claim ranges are ambiguous, the edit would remove more
 than 90 percent of the video, or fewer than 60 seconds would remain. The guard
@@ -81,7 +83,10 @@ restriction reason, selected action, claim range, screenshots, trace, timestamps
 and final verification. WAL and short transactions allow the publisher and guard
 to run as separate processes.
 
-Ctrl+C marks an in-flight action uncertain and skips new synchronous Playwright
-cleanup calls. If the browser operation still does not unwind within five seconds,
-a watchdog forces exit code 130. Windows and Linux launchers recognize that code as
-an operator stop and do not restart the guard.
+Long page-render and submission-confirmation waits use one-second Playwright
+slices and check the stop event between slices. Transient execution-context errors
+during Studio route changes are retried up to the configured navigation/action
+deadline. Ctrl+C marks an in-flight action uncertain and skips new synchronous
+Playwright cleanup calls. If the browser operation still does not unwind within
+five seconds, a watchdog forces exit code 130. Windows and Linux launchers
+recognize that code as an operator stop and do not restart the guard.

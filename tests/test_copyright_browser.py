@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import os
+import threading
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -86,8 +87,25 @@ def test_opens_authenticated_persistent_session_and_saves_trace(tmp_path: Path) 
     )
     context.storage_state.assert_called()
     context.tracing.stop.assert_called_once_with(path=str(trace_path))
-    page.goto.assert_called_once()
+    page.goto.assert_called_once_with(
+        "https://studio.youtube.com/",
+        wait_until="commit",
+        timeout=1_000,
+    )
     playwright.stop.assert_called_once()
+
+
+def test_studio_readiness_wait_honours_stop_event(tmp_path: Path) -> None:
+    stop_event = threading.Event()
+    stop_event.set()
+    manager = StudioBrowserManager(
+        _browser_config(tmp_path),
+        _diagnostics(tmp_path),
+        stop_event=stop_event,
+    )
+
+    with pytest.raises(KeyboardInterrupt, match="interrupted"):
+        manager._wait_until_studio_or_login(MagicMock(url="about:blank"))
 
 
 @pytest.mark.parametrize("trace_mode", ["off", "on_error"])

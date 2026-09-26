@@ -477,12 +477,20 @@ require the same continuous RAM buffering as `always`. If Google expires the
 session, affected videos receive `AUTH_REQUIRED`; run `-Login` again.
 
 Only one guard instance can own `data/youtube_copyright_guard.lock`. Ctrl+C uses an
-interruptible event and does not wait for Studio processing. An interrupted browser
-action is marked uncertain, blocking automatic retries. Playwright cleanup is
-skipped on SIGINT, and a five-second watchdog forces exit code 130 if a synchronous
-browser call does not unwind; both launchers treat 130 as a user stop and never
-restart it. Submitted edits are rechecked in a later cycle. Full architecture and
-state details are documented in
+interruptible event and the long Studio page/confirmation waits poll in at most
+one-second Playwright slices. An interrupted browser action is marked uncertain,
+blocking automatic retries. Playwright cleanup is skipped on SIGINT, and a
+five-second watchdog forces exit code 130 if a synchronous browser call does not
+unwind; both launchers treat 130 as a user stop and never restart it.
+
+`youtube_copyright.browser.navigation_timeout_seconds` controls how long a slow
+claims page may render (60 seconds by default). `action_timeout_seconds` controls
+how long the guard waits for Studio to acknowledge an irreversible edit (600
+seconds by default). Transient execution-context errors caused by Studio route
+changes are retried until that deadline instead of immediately marking the action
+uncertain. A heartbeat is logged every 15 seconds while confirmation is pending.
+Submitted edits are rechecked in a later cycle. Full architecture and state
+details are documented in
 [`docs/YOUTUBE_COPYRIGHT_GUARD.md`](docs/YOUTUBE_COPYRIGHT_GUARD.md).
 
 After manually verifying that an interrupted Studio edit is safe to retry, reset
