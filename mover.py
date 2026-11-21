@@ -105,7 +105,7 @@ def move_processed_recording(
 
     if not fully_processed:
         reason = "Not all required platforms have SUCCESS or SKIPPED status"
-        logger.info("%s: %s", reason, video)
+        logger.debug("%s: %s", reason, video)
         return MoveResult(moved=False, reason=reason)
 
     try:

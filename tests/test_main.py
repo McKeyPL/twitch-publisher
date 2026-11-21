@@ -768,3 +768,28 @@ def test_unknown_browser_outcome_is_not_retried_next_cycle(tmp_path: Path, monke
     assert record is not None
     assert record.status is UploadStatus.FAILED
     assert (record.last_error or "").startswith("[NO_AUTO_RETRY]")
+
+
+@pytest.mark.parametrize("duration_seconds", [3600, 13 * 3600])
+def test_youtube_quota_pause_leaves_other_platforms_running(
+    tmp_path, monkeypatch, duration_seconds
+):
+    from uploaders.youtube import YouTubeUploader, _pacific_quota_window
+
+    config = config_for(tmp_path, monkeypatch)
+    video, metadata = make_recording(config.paths.recordings_root)
+    uploaders = successful_uploaders(config)
+    with StateStore(config.paths.database) as store:
+        settings = replace(config.platforms.youtube, daily_upload_limit=1)
+        uploaders["youtube"] = YouTubeUploader(settings, config.retry, store)
+        period, _ = _pacific_quota_window()
+        assert store.try_reserve_quota("youtube_videos_insert", period, 1, 1)[0]
+
+        process_ready_recording(
+            video, metadata, duration_seconds, config, store, uploaders
+        )
+
+        assert store.get_status(video, "youtube") is None
+        assert not store.get_part_statuses(video, "youtube")
+        assert store.get_status(video, "cda").status is UploadStatus.SUCCESS
+        assert store.get_status(video, "rumble").status is UploadStatus.SUCCESS

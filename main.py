@@ -10,6 +10,7 @@ import signal
 import sys
 import threading
 import time
+from collections import Counter
 from dataclasses import replace
 from pathlib import Path
 from typing import Callable, Mapping, Sequence
@@ -46,6 +47,7 @@ from youtube_copyright.process_lock import GuardAlreadyRunning, SingleInstanceLo
 logger = logging.getLogger(__name__)
 DurationProbe = Callable[[Path], float]
 _disk_space = DiskSpaceMonitor()
+_next_scan_summary = 0.0
 NO_AUTO_RETRY_PREFIX = "[NO_AUTO_RETRY] "
 
 
@@ -514,7 +516,7 @@ def _process_multipart_platform(
             record.status is UploadStatus.FAILED
             and (record.last_error or "").startswith(NO_AUTO_RETRY_PREFIX)
         ):
-            logger.warning(
+            logger.debug(
                 "%s: part %d/%d requires manual verification; not retrying: %s",
                 platform,
                 part.index,
@@ -523,6 +525,8 @@ def _process_multipart_platform(
             )
             continue
 
+        if isinstance(uploader, YouTubeUploader) and uploader.upload_pause_reason():
+            continue
         title = title_from_metadata_part(
             metadata,
             config.metadata.title_template,
@@ -761,6 +765,19 @@ def process_ready_recording(
                 platform,
             )
             existing_parts = state_store.get_part_statuses(video_path, platform)
+            if (
+                isinstance(uploader, YouTubeUploader)
+                and (current is None or current.status not in {UploadStatus.SUCCESS, UploadStatus.SKIPPED})
+                and (
+                    not existing_parts
+                    or any(
+                        part.status not in {UploadStatus.SUCCESS, UploadStatus.SKIPPED}
+                        for part in existing_parts
+                    )
+                )
+                and uploader.upload_pause_reason()
+            ):
+                continue
             if needs_multipart and (
                 current is None
                 or current.status is not UploadStatus.SUCCESS
@@ -792,10 +809,10 @@ def process_ready_recording(
                         uploader,
                         retry_missing=True,
                     )
-                logger.info("%s: skipping terminal status %s", platform, current.status.value)
+                logger.debug("%s: skipping terminal status %s", platform, current.status.value)
                 continue
             if current is not None and current.status is UploadStatus.SKIPPED:
-                logger.info("%s: skipping terminal status %s", platform, current.status.value)
+                logger.debug("%s: skipping terminal status %s", platform, current.status.value)
                 continue
             if (
                 platform == "rumble"
@@ -830,7 +847,7 @@ def process_ready_recording(
                 and current.status is UploadStatus.FAILED
                 and (current.last_error or "").startswith(NO_AUTO_RETRY_PREFIX)
             ):
-                logger.warning(
+                logger.debug(
                     "%s: the previous upload requires manual verification; "
                     "automatic retry is disabled: %s",
                     platform,
@@ -999,7 +1016,8 @@ def run_cycle(
     now: float | None = None,
     duration_probe: DurationProbe | None = None,
 ) -> list[ReadinessResult]:
-    logger.info("Starting recording scan: %s", config.paths.recordings_root)
+    global _next_scan_summary
+    logger.debug("Starting recording scan: %s", config.paths.recordings_root)
     results = scan_cycle(
         config.paths.recordings_root,
         tracker,
@@ -1010,11 +1028,16 @@ def run_cycle(
     ready_count = sum(
         result.status is ReadinessStatus.READY for result in results
     )
-    logger.info(
-        "Recording scan finished: candidates=%d, ready=%d",
-        len(results),
-        ready_count,
-    )
+    summary_time = time.monotonic()
+    if summary_time >= _next_scan_summary:
+        waiting = Counter(
+            result.reason for result in results if result.status is not ReadinessStatus.READY
+        )
+        logger.info(
+            "Recording scan finished: candidates=%d, ready=%d, waiting=%d; top reasons: %s",
+            len(results), ready_count, len(results) - ready_count, waiting.most_common(5),
+        )
+        _next_scan_summary = summary_time + 900
     process_readiness_results(
         results, config, state_store, uploaders, duration_probe=duration_probe
     )

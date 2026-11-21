@@ -507,3 +507,28 @@ def test_rejects_long_title_before_reserving_quota(tmp_path, youtube_config, ret
         assert not result.success
         period, _ = _pacific_quota_window()
         assert store.get_quota_usage("youtube_videos_insert", period) == 0
+
+
+def test_rate_limit_survives_reopening_upload_state(tmp_path, youtube_config, retry_config):
+    video = make_video(tmp_path)
+    database = tmp_path / "state.sqlite3"
+    service = successful_video_service()
+    request = service.videos.return_value.insert.return_value
+    request.next_chunk.side_effect = HttpError(
+        httplib2.Response({"status": "429", "retry-after": "120"}),
+        b'{"error":{"errors":[{"reason":"rateLimitExceeded"}]}}',
+    )
+    with StateStore(database) as store:
+        uploader = YouTubeUploader(youtube_config, retry_config, store)
+        with patch.object(uploader, "_get_service", return_value=service):
+            assert not uploader.upload(video, "Title", "Description", []).success
+        assert store.get_youtube_insert_backoff()[1:] == (1, "rateLimitExceeded")
+
+    with StateStore(database) as store:
+        uploader = YouTubeUploader(youtube_config, retry_config, store)
+        with patch.object(uploader, "_get_service") as api:
+            deferred = uploader.upload(video, "Title", "Description", [])
+        assert "paused until" in deferred.error_message
+        api.assert_not_called()
+        period, _ = _pacific_quota_window()
+        assert store.get_quota_usage("youtube_videos_insert", period) == 1

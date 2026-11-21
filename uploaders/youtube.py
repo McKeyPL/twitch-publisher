@@ -5,10 +5,12 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import random
 import re
 import threading
 from dataclasses import dataclass
 from datetime import datetime, time as datetime_time, timedelta, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -124,6 +126,7 @@ class YouTubeUploader(BaseUploader):
         self.state_store = state_store
         self.api_client = YouTubeApiClient(config)
         self._service: Any | None = None
+        self._last_upload_pause: str | None = None
 
     @property
     def platform_name(self) -> str:
@@ -313,6 +316,54 @@ class YouTubeUploader(BaseUploader):
         )
         return CaptionUploadResult(True, caption_id=caption_id, status=status)
 
+    def _report_upload_pause(self, message: str) -> str:
+        if self._last_upload_pause != message:
+            logger.warning("%s", message)
+            self._last_upload_pause = message
+        return message
+
+    def upload_pause_reason(self) -> str | None:
+        backoff = self.state_store.get_youtube_insert_backoff()
+        if backoff is not None and backoff[0] > datetime.now(timezone.utc).timestamp():
+            retry_at = datetime.fromtimestamp(backoff[0], timezone.utc)
+            return self._report_upload_pause(
+                f"YouTube uploads paused until {retry_at.isoformat()}: {backoff[2]}"
+            )
+        period, reset = _pacific_quota_window()
+        used = self.state_store.get_quota_usage("youtube_videos_insert", period)
+        if used + self.config.upload_quota_units > self.config.daily_upload_limit:
+            return self._report_upload_pause(
+                f"Local YouTube quota limit for videos.insert reached "
+                f"({used}/{self.config.daily_upload_limit}); next reset at Pacific Time midnight: "
+                f"{reset.isoformat()}"
+            )
+        self._last_upload_pause = None
+        return None
+
+    def _defer_api_upload(self, error: HttpError) -> None:
+        reason = _youtube_error_reason(error)
+        status = int(getattr(error.resp, "status", 0))
+        if reason in {"quotaExceeded", "dailyLimitExceeded"}:
+            _, reset = _pacific_quota_window()
+            self.state_store.set_youtube_insert_backoff(reset.timestamp(), reason)
+        elif status == 429 or reason in {"rateLimitExceeded", "userRateLimitExceeded"}:
+            backoff = self.state_store.get_youtube_insert_backoff()
+            failures = backoff[1] if backoff is not None else 0
+            now = datetime.now(timezone.utc).timestamp()
+            delay = min(3600, 60 * 2 ** min(failures, 6))
+            retry_at = now + delay * random.uniform(0.8, 1.0)
+            header = error.resp.get("retry-after")
+            if header:
+                try:
+                    if header.isdigit():
+                        server_retry = now + int(header)
+                    else:
+                        server_retry = parsedate_to_datetime(header).timestamp()
+                    retry_at = max(retry_at, server_retry)
+                except (TypeError, ValueError, OverflowError):
+                    pass
+            self.state_store.set_youtube_insert_backoff(retry_at, reason or "HTTP 429")
+
     def _reserve_quota(self, include_captions: bool) -> tuple[bool, str | None]:
         period, next_reset = _pacific_quota_window()
         reservations = [
@@ -399,6 +450,9 @@ class YouTubeUploader(BaseUploader):
         except OSError as exc:
             return UploadResult(False, error_message=str(exc))
 
+        pause_reason = self.upload_pause_reason()
+        if pause_reason:
+            return UploadResult(False, error_message=pause_reason)
         quota_ok, quota_error = self._reserve_quota(usable_srt is not None)
         if not quota_ok:
             return UploadResult(False, error_message=quota_error)
@@ -436,14 +490,18 @@ class YouTubeUploader(BaseUploader):
             raise
         except Exception as exc:
             message = _friendly_youtube_error(exc)
-            if isinstance(exc, HttpError) and _youtube_error_reason(exc) == "invalidTitle":
-                message = youtube_title_rejection_key(title) + message
+            if isinstance(exc, HttpError):
+                self._defer_api_upload(exc)
+                if _youtube_error_reason(exc) == "invalidTitle":
+                    message = youtube_title_rejection_key(title) + message
             logger.exception("YouTube upload failed: %s", message)
             return UploadResult(False, error_message=message)
 
         video_id = response.get("id") if response else None
         if not video_id:
             return UploadResult(False, error_message="YouTube returned no video ID after upload")
+        if self.state_store.get_youtube_insert_backoff() is not None:
+            self.state_store.clear_youtube_insert_backoff()
         video_url = f"https://youtube.com/watch?v={video_id}"
 
         captions_uploaded = False

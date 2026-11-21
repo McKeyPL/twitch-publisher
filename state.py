@@ -104,6 +104,13 @@ CREATE TABLE IF NOT EXISTS api_quota_usage (
     PRIMARY KEY (platform, quota_period)
 );
 
+CREATE TABLE IF NOT EXISTS youtube_insert_backoff (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    retry_at REAL NOT NULL,
+    failures INTEGER NOT NULL,
+    reason TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS upload_part_status (
     video_path TEXT NOT NULL,
     platform TEXT NOT NULL CHECK (platform IN ('youtube', 'cda', 'rumble')),
@@ -948,6 +955,32 @@ class StateStore:
                 ),
             )
         return int(cursor.rowcount) + int(part_cursor.rowcount)
+
+    def get_youtube_insert_backoff(self) -> tuple[float, int, str] | None:
+        row = self._require_connection().execute(
+            "SELECT retry_at, failures, reason FROM youtube_insert_backoff WHERE id = 1"
+        ).fetchone()
+        return None if row is None else (row["retry_at"], row["failures"], row["reason"])
+
+    def set_youtube_insert_backoff(self, retry_at: float, reason: str) -> None:
+        connection = self._require_connection()
+        with connection:
+            connection.execute(
+                """
+                INSERT INTO youtube_insert_backoff (id, retry_at, failures, reason)
+                VALUES (1, ?, 1, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    retry_at = MAX(retry_at, excluded.retry_at),
+                    failures = failures + 1,
+                    reason = excluded.reason
+                """,
+                (retry_at, reason),
+            )
+
+    def clear_youtube_insert_backoff(self) -> None:
+        connection = self._require_connection()
+        with connection:
+            connection.execute("DELETE FROM youtube_insert_backoff WHERE id = 1")
 
     def get_quota_usage(self, bucket: str, period: str) -> int:
         """Return locally reserved units for a quota period."""

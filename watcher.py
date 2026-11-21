@@ -100,7 +100,7 @@ def scan_cycle(
         )
         results.append(result)
         if result.status is not ReadinessStatus.READY:
-            logger.info("Recording is waiting: %s - %s", video_path, result.reason)
+            logger.debug("Recording is waiting: %s - %s", video_path, result.reason)
         else:
             logger.debug("Recording is ready: %s", video_path)
     return results
