@@ -12,7 +12,7 @@ from typing import Any, Iterable
 
 from .diagnostics import DiagnosticRun
 from .models import RemediationAction
-from .studio_parser import ParsedStudioClaim, StudioClaimParser
+from .studio_parser import ParsedStudioClaim, StudioClaimParser, extract_unambiguous_range
 
 
 logger = logging.getLogger(__name__)
@@ -222,6 +222,55 @@ class StudioCopyrightExecutor:
                 f"{claim_data_error}"
             ) from claim_data_error
         return StudioInspection(video_id, processing, tuple(claims), self.page.url)
+
+    def read_claim_range(
+        self, video_id: str, parsed_claim: ParsedStudioClaim
+    ) -> tuple[float | None, float | None]:
+        """Read the selected claim's details without opening the action menu."""
+        self._validate_video_id(video_id)
+        self._raise_if_cancelled()
+        title = parsed_claim.claim.content_title
+        rows = self.page.locator(
+            "ytcr-video-content-list-row, ytcp-video-copyright-claim-row, "
+            "ytcp-copyright-claim-row, [role='row']"
+        ).filter(has=self.page.get_by_text(title, exact=True))
+        visible = _unique_locators(_visible_candidates(rows))
+        if len(visible) != 1:
+            return None, None
+        buttons = _visible_candidates(
+            visible[0].get_by_role("button", name=re.compile(r"^(view|see) details$", re.I))
+        )
+        if len(buttons) != 1:
+            return None, None
+        buttons[0].click(timeout=3_000)
+        try:
+            dialogs = self.page.get_by_role("dialog").filter(
+                has=self.page.get_by_text(title, exact=True)
+            )
+            try:
+                dialogs.first.wait_for(state="visible", timeout=3_000)
+            except Exception:
+                return None, None
+            matches = _unique_locators(_visible_candidates(dialogs))
+            if len(matches) != 1:
+                return None, None
+            self._validate_video_id(video_id)
+            start, end = extract_unambiguous_range(matches[0].inner_text(timeout=3_000))
+            self.diagnostic.write_json(
+                "claim_range", {"claim": title, "start_seconds": start, "end_seconds": end}
+            )
+        finally:
+            self.page.keyboard.press("Escape")
+        self._validate_video_id(video_id)
+        if _visible_candidates(dialogs):
+            return None, None
+        restored = [
+            item for item in self.parser.extract(self.page, video_id)
+            if item.claim.fingerprint == parsed_claim.claim.fingerprint
+        ]
+        if len(restored) != 1 or restored[0].dom_index != parsed_claim.dom_index:
+            return None, None
+        return start, end
 
     def execute(
         self,

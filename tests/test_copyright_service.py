@@ -490,7 +490,10 @@ def test_unconfirmed_irreversible_action_is_not_retried_automatically(
         assert copyright_store.latest_action("blocked-video").state is ActionState.UNCERTAIN
 
 
-def test_trim_resolution_retimes_owned_captions_before_resolved(tmp_path: Path) -> None:
+@pytest.mark.parametrize("range_in_details", [False, True])
+def test_trim_resolution_retimes_owned_captions_before_resolved(
+    tmp_path: Path, range_in_details: bool
+) -> None:
     config = _config(tmp_path)
     from dataclasses import replace
 
@@ -525,7 +528,11 @@ def test_trim_resolution_retimes_owned_captions_before_resolved(tmp_path: Path) 
         "trim-video",
         [
             {
-                "text": "Visual video segment\n00:10 - 00:20\nBlocked in Germany",
+                "text": (
+                    "Visual video segment\nBlocked in Germany"
+                    if range_in_details
+                    else "Visual video segment\n00:10 - 00:20\nBlocked in Germany"
+                ),
                 "actions": "Trim out segment",
             }
         ],
@@ -541,6 +548,7 @@ def test_trim_resolution_retimes_owned_captions_before_resolved(tmp_path: Path) 
     executor.inspect.return_value = StudioInspection(
         "trim-video", False, (parsed,), "https://studio.youtube.com/video/trim-video/copyright"
     )
+    executor.read_claim_range.return_value = (10.0, 20.0)
     executor.execute.return_value = StudioExecutionResult(
         True,
         False,
@@ -567,6 +575,8 @@ def test_trim_resolution_retimes_owned_captions_before_resolved(tmp_path: Path) 
         assert first.actions_submitted == 1
         action = copyright_store.latest_action("trim-video")
         assert action is not None
+        assert action.trim_ranges == ((10.0, 20.0),)
+        assert executor.read_claim_range.call_count == int(range_in_details)
         assert copyright_store.get_caption_backup(action.id).status == "PENDING"
 
         resolved = _resource("trim-video", None)

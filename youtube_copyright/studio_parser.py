@@ -57,7 +57,7 @@ class StudioClaimParser:
             actions_text = _normalize_text(str(row.get("actions", "")))
             combined = f"{text} {actions_text}".lower()
             claim_type = _claim_type(combined)
-            start, end = _extract_range(text)
+            start, end = extract_unambiguous_range(text)
             actions = tuple(
                 action
                 for action, aliases in _ACTION_ALIASES.items()
@@ -122,11 +122,17 @@ def _claim_type(text: str) -> ClaimType:
     return ClaimType.UNKNOWN
 
 
-def _extract_range(text: str) -> tuple[float | None, float | None]:
-    match = _TIME_RANGE.search(text)
-    if match is None:
+def extract_unambiguous_range(text: str) -> tuple[float | None, float | None]:
+    ranges = {
+        (_timestamp_seconds(match.group("start")), _timestamp_seconds(match.group("end")))
+        for match in _TIME_RANGE.finditer(text)
+    }
+    if len(ranges) != 1:
         return None, None
-    return _timestamp_seconds(match.group("start")), _timestamp_seconds(match.group("end"))
+    start, end = ranges.pop()
+    if end <= start:
+        return None, None
+    return start, end
 
 
 def _timestamp_seconds(value: str) -> float:

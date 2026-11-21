@@ -446,21 +446,24 @@ class CopyrightGuardService:
 
                 trim_ranges: tuple[tuple[float, float], ...] = ()
                 if decision.action is RemediationAction.TRIM:
-                    if (
-                        video.duration_seconds is None
-                        or parsed_claim.claim.start_seconds is None
-                        or parsed_claim.claim.end_seconds is None
-                    ):
-                        raise ValueError(
-                            "Trim requires video duration and an unambiguous claim range"
+                    start = parsed_claim.claim.start_seconds
+                    end = parsed_claim.claim.end_seconds
+                    if video.duration_seconds and (start is None or end is None):
+                        start, end = executor.read_claim_range(video_id, parsed_claim)
+                    if not video.duration_seconds or start is None or end is None:
+                        message = "Trim requires video duration and an unambiguous claim range"
+                        self.copyright_store.update_video_state(
+                            video_id,
+                            VideoState.MANUAL_REQUIRED,
+                            last_error=message,
+                            next_check_at=max(
+                                next_check, datetime.now(timezone.utc) + timedelta(days=1)
+                            ),
                         )
+                        logger.warning("%s for %s", message, video_id)
+                        return False
                     trim_ranges = validate_trim_ranges(
-                        [
-                            (
-                                parsed_claim.claim.start_seconds,
-                                parsed_claim.claim.end_seconds,
-                            )
-                        ],
+                        [(start, end)],
                         duration_seconds=video.duration_seconds,
                         max_trim_fraction=self.config.youtube_copyright.max_trim_fraction,
                         min_remaining_seconds=(

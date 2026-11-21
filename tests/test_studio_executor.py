@@ -605,3 +605,11 @@ def test_executor_refuses_wrong_video_page(tmp_path: Path) -> None:
             dry_run=True,
             trace_path=None,
         )
+
+
+def test_copyright_parser_refuses_to_guess_when_claim_has_multiple_ranges():
+    from youtube_copyright.studio_parser import extract_unambiguous_range
+
+    assert extract_unambiguous_range("Claimed content 1:03:00 – 1:04:00") == (3780.0, 3840.0)
+    assert extract_unambiguous_range("0:10 to 0:20; 0:40 to 0:45") == (None, None)
+    assert extract_unambiguous_range("0:20 to 0:10") == (None, None)
