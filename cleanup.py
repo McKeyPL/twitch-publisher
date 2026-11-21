@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
-from config import load_config
+from config import ConfigError, load_config
 
 
 logger = logging.getLogger(__name__)
@@ -131,8 +131,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
-    config = load_config(args.config)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    try:
+        config = load_config(args.config)
+    except ConfigError as exc:
+        parser.error(str(exc))
     logging.basicConfig(level=getattr(logging, config.logging.level.upper(), logging.INFO))
     retention_days = (
         config.cleanup.retention_days

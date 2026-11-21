@@ -84,6 +84,10 @@ while ($true) {
         exit 0
     }
 
+    if ($pythonExitCode -eq 2) {
+        Write-LauncherLog "Publisher configuration or arguments are invalid; not restarting."
+        exit 2
+    }
     if ($Once -or $forwardedOnce) {
         Write-LauncherLog "main.py exited with code $pythonExitCode; Once mode will not restart."
         exit $pythonExitCode

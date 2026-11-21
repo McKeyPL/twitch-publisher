@@ -30,7 +30,7 @@ def _config(tmp_path: Path):
         clear=True,
     ):
         return load_config(
-            PROJECT_ROOT / "config.yaml", dotenv_path=tmp_path / "missing.env"
+            PROJECT_ROOT / "tests" / "fixtures" / "config.yaml", dotenv_path=tmp_path / "missing.env"
         ).youtube_copyright
 
 

@@ -60,7 +60,7 @@ def test_guard_returns_exit_130_after_keyboard_interrupt(tmp_path: Path) -> None
         clear=True,
     ):
         config = load_config(
-            PROJECT_ROOT / "config.yaml",
+            PROJECT_ROOT / "tests" / "fixtures" / "config.yaml",
             dotenv_path=tmp_path / "missing.env",
         )
     service = MagicMock()

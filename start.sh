@@ -136,6 +136,10 @@ while true; do
         exit 0
     fi
 
+    if ((EXIT_CODE == 2)); then
+        launcher_log "Publisher configuration or arguments are invalid; not restarting."
+        exit 2
+    fi
     if $ONCE; then
         launcher_log "main.py exited with code $EXIT_CODE; Once mode will not restart."
         exit "$EXIT_CODE"

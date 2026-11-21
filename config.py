@@ -963,6 +963,12 @@ def load_config(
     try:
         with yaml_path.open("r", encoding="utf-8") as stream:
             raw = yaml.safe_load(stream)
+    except FileNotFoundError as exc:
+        raise ConfigError(
+            f"Configuration file {yaml_path} is missing. Restore your backup, "
+            "or copy config.example.yaml to config.yaml and configure it. "
+            "Use --config to select a different file."
+        ) from exc
     except OSError as exc:
         raise ConfigError(f"Cannot read configuration {yaml_path}: {exc}") from exc
     except yaml.YAMLError as exc:

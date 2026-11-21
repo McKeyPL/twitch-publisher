@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
 import yaml
 
 from config import ConfigError, config_from_dict, expand_environment_variables, load_config
@@ -294,3 +295,20 @@ class ConfigValidationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_example_config_leaves_uploads_and_copyright_guard_disabled(tmp_path):
+    example = FIXTURES_DIR.parents[1] / "config.example.yaml"
+    with patch.dict(os.environ, {}, clear=True):
+        config = load_config(example, dotenv_path=tmp_path / "missing.env")
+
+    assert not config.platforms.youtube.enabled
+    assert not config.platforms.cda.enabled
+    assert not config.platforms.rumble.enabled
+    assert not config.youtube_copyright.enabled
+    assert config.youtube_copyright.mode == "report"
+
+
+def test_missing_runtime_config_explains_how_to_restore_it(tmp_path):
+    with pytest.raises(ConfigError, match=r"config\.example\.yaml"):
+        load_config(tmp_path / "config.yaml")

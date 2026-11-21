@@ -88,6 +88,10 @@ while true; do
     CHILD_PID=""
     if ((exit_code == 130)); then exit 130; fi
     if ((exit_code == 0)); then exit 0; fi
+    if ((exit_code == 2)); then
+        printf '%s\n' "Copyright Guard configuration or arguments are invalid; not restarting." >&2
+        exit 2
+    fi
     if $ONCE || $LOGIN || ((${#RESET_VIDEO_IDS[@]})); then exit "$exit_code"; fi
     ((restart_count += 1))
     sleep "$RESTART_DELAY" &

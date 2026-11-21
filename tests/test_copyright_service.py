@@ -33,7 +33,7 @@ def _config(tmp_path: Path):
         },
         clear=True,
     ):
-        config = load_config(PROJECT_ROOT / "config.yaml", dotenv_path=tmp_path / "none")
+        config = load_config(PROJECT_ROOT / "tests" / "fixtures" / "config.yaml", dotenv_path=tmp_path / "none")
     from dataclasses import replace
 
     return replace(

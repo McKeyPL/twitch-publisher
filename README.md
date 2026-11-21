@@ -7,6 +7,15 @@ moves fully processed recording sets into each channel's `_uploaded` directory.
 The application never uses cron, systemd timers, or Windows Task Scheduler. Start
 and stop it explicitly with the platform launcher.
 
+## Upgrading from v2.1.0 or earlier
+
+> [!CAUTION]
+> **Back up your active `config.yaml` outside this repository before updating to v3.0.0.**
+> After updating, restore it to the repository root before restarting either
+> process. The release now tracks `config.example.yaml`, and Git may remove the
+> previously tracked file during the update. If you have no backup,
+> `git show v2.1.0:config.yaml` can recover the committed settings.
+
 ## Supported environments
 
 - Python 3.11 or newer.
@@ -47,10 +56,12 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
 python -m pip install --upgrade pip
 pip install -r requirements.txt
 playwright install firefox chromium
-Copy-Item .env.example .env
+if (-not (Test-Path -LiteralPath .env)) { Copy-Item .env.example .env }
+if (-not (Test-Path -LiteralPath config.yaml)) { Copy-Item config.example.yaml config.yaml }
 ```
 
-4. Edit `.env` and `config.yaml`, then start manually:
+4. Edit `.env` and `config.yaml`. Set your recordings path and enable each
+   upload platform you want to use, then start manually:
 
 ```powershell
 .\start.ps1
@@ -83,7 +94,8 @@ Useful variants:
 
 The installer detects `apt`, `dnf`, or `yum`, installs Python 3.11+, FFmpeg,
 Firefox, creates `.venv`, installs Python dependencies and Playwright Firefox and
-Chromium, and creates a protected `.env` when one does not exist.
+Chromium, and creates `.env` and `config.yaml` when missing. Review your
+local `config.yaml` and enable the upload platforms you want to use.
 
 Important repository notes:
 

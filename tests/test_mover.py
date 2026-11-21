@@ -19,7 +19,7 @@ REQUIRED_PLATFORMS = ["youtube", "cda", "rumble"]
 @pytest.fixture
 def config(monkeypatch: pytest.MonkeyPatch) -> Config:
     monkeypatch.setenv("YOUTUBE_CLIENT_SECRETS_FILE", "auth/credentials.json")
-    return load_config(PROJECT_ROOT / "config.yaml")
+    return load_config(PROJECT_ROOT / "tests" / "fixtures" / "config.yaml")
 
 
 def mark_fully_processed(store: StateStore, video: Path) -> None:

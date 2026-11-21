@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Callable, Sequence
 
 from log_limits import BoundedLogHandler, DiskSpaceMonitor
-from config import Config, load_config
+from config import Config, ConfigError, load_config
 from memory_guard import MemoryGuard, MemoryPressureError, mebibytes
 from state import StateStore
 from youtube_copyright.service import CopyrightGuardService
@@ -252,8 +252,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
-    config = load_config(args.config)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    try:
+        config = load_config(args.config)
+    except ConfigError as exc:
+        parser.error(str(exc))
     copyright_config = config.youtube_copyright
     if args.dry_run:
         copyright_config = replace(copyright_config, mode="dry_run")

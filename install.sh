@@ -205,6 +205,13 @@ else
     color 33 "[WARNING] Existing .env was preserved. Verify RECORDINGS_ROOT manually."
 fi
 
+if [[ ! -e config.yaml && ! -L config.yaml ]]; then
+    cp -n -- config.example.yaml config.yaml
+    color 32 "Created config.yaml from config.example.yaml. Configure and enable the platforms you want to use."
+else
+    color 32 "Existing config.yaml was preserved."
+fi
+
 chmod +x start.sh install.sh
 color 32 "Installation completed successfully."
 color 33 "Configure credentials and RUMBLE_LICENSE_OPTION in .env before the first upload."

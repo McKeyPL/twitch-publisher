@@ -31,7 +31,7 @@ twitch-publisher/
 |-- tests/                      # offline unit and integration tests
 |-- .env.example
 |-- .gitignore
-|-- config.yaml
+|-- config.example.yaml
 |-- config.py                   # YAML, dotenv expansion, validation
 |-- watcher.py                  # one non-blocking scan cycle
 |-- meta_parser.py              # multiline metadata parser

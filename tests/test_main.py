@@ -217,7 +217,7 @@ class SequencedUploader(FakeUploader):
 
 def config_for(tmp_path: Path, monkeypatch) -> Config:
     monkeypatch.setenv("YOUTUBE_CLIENT_SECRETS_FILE", "credentials.json")
-    config = load_config(Path(__file__).parents[1] / "config.yaml")
+    config = load_config(Path(__file__).with_name("fixtures") / "config.yaml")
     paths = replace(
         config.paths,
         recordings_root=tmp_path / "recordings",

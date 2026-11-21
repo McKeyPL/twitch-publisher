@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Callable, Mapping, Sequence
 
 from log_limits import BoundedLogHandler, DiskSpaceMonitor, prune_browser_artifacts
-from config import Config, load_config
+from config import Config, ConfigError, load_config
 from duration_check import (
     FileSizeStabilityTracker,
     ReadinessResult,
@@ -1168,8 +1168,15 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
-    config = load_config(args.config)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    try:
+        config = load_config(args.config)
+    except ConfigError as exc:
+        parser.error(str(exc))
+    platforms = config.platforms
+    if not any((platforms.youtube.enabled, platforms.cda.enabled, platforms.rumble.enabled)):
+        parser.error("Enable at least one upload platform in your local configuration.")
     if args.browser_debug:
         config = replace(
             config,

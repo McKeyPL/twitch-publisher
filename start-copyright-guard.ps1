@@ -75,6 +75,10 @@ while ($true) {
         Write-LauncherLog "copyright_guard.py exited successfully."
         exit 0
     }
+    if ($exitCode -eq 2) {
+        Write-LauncherLog "Copyright Guard configuration or arguments are invalid; not restarting."
+        exit 2
+    }
     if ($Once -or $Login -or $ResetVideo.Count -gt 0 -or $forwardedOnce -or $forwardedLogin -or $forwardedReset) {
         Write-LauncherLog "copyright_guard.py exited with code $exitCode; one-shot mode will not restart."
         exit $exitCode

@@ -106,6 +106,17 @@ jobs:
             --jq '.[0].tagName // empty')"
 
           {
+            if [[ -f CHANGELOG.md ]]; then
+              awk -v heading="## ${RELEASE_TAG%%-*}" '
+                /^## / {
+                  if (emit) exit
+                  emit = ($0 == heading)
+                  next
+                }
+                emit { print }
+              ' CHANGELOG.md
+              echo
+            fi
             echo "## Commit summary"
             echo
             if [[ -n "$previous_tag" ]]; then
