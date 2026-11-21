@@ -21,6 +21,16 @@ TWITCH_COMMAND_RE = re.compile(r"(?<!\S)![^\s!]+", flags=re.UNICODE)
 UNDERSCORES_RE = re.compile(r"_+")
 WHITESPACE_RE = re.compile(r"\s+")
 
+YOUTUBE_TITLE_MAX_LENGTH = 100
+_YOUTUBE_TITLE_REPLACEMENTS = str.maketrans({"<": "‹", ">": "›"})
+_INVALID_TITLE_CODE_POINTS = re.compile(r"[\x00-\x1f\x7f-\x9f\ud800-\udfff]")
+
+
+def sanitize_youtube_title(text: str) -> str:
+    """Replace forbidden brackets, controls, and invalid Unicode surrogates."""
+    return _INVALID_TITLE_CODE_POINTS.sub(" ", text.translate(_YOUTUBE_TITLE_REPLACEMENTS))
+
+
 _ALLOWED_TEMPLATE_FIELDS = {"clean_title", "channel", "date_YYYY-MM-DD"}
 
 
@@ -129,17 +139,28 @@ def title_from_metadata(
     metadata: StreamMetadata,
     template: str,
     max_length: int | None,
+    *,
+    youtube: bool = False,
 ) -> str:
     """Build a platform title directly from parsed ``StreamMetadata``."""
     stream_date = metadata.started.date()
+    raw_title, channel = metadata.title, metadata.channel
+    if youtube:
+        raw_title = sanitize_youtube_title(raw_title)
+        channel = sanitize_youtube_title(channel).strip()
+        template = sanitize_youtube_title(template)
+        if max_length is None:
+            max_length = YOUTUBE_TITLE_MAX_LENGTH
+        else:
+            max_length = min(max_length, YOUTUBE_TITLE_MAX_LENGTH)
     cleaned = clean_title(
-        metadata.title,
-        nick=metadata.channel,
+        raw_title,
+        nick=channel,
         stream_date=stream_date,
     )
     return build_final_title(
         cleaned,
-        metadata.channel,
+        channel,
         stream_date,
         template,
         max_length,
@@ -152,6 +173,8 @@ def title_from_metadata_part(
     max_length: int | None,
     part_index: int,
     total_parts: int,
+    *,
+    youtube: bool = False,
 ) -> str:
     """Build a multipart title while reserving room for the fixed part suffix."""
     if (
@@ -165,8 +188,13 @@ def title_from_metadata_part(
     ):
         raise TitleError("Invalid multipart title index/count")
     suffix = f" (Part {part_index}/{total_parts})"
+    if youtube:
+        max_length = min(
+            max_length if max_length is not None else YOUTUBE_TITLE_MAX_LENGTH,
+            YOUTUBE_TITLE_MAX_LENGTH,
+        )
     base_limit = None if max_length is None else max_length - len(suffix)
     if base_limit is not None and base_limit <= 0:
         raise TitleError("max_length cannot fit the multipart suffix")
-    base = title_from_metadata(metadata, template, base_limit)
+    base = title_from_metadata(metadata, template, base_limit, youtube=youtube)
     return base + suffix

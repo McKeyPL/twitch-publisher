@@ -22,6 +22,7 @@ from googleapiclient.http import MediaFileUpload
 from config import RetryConfig, YouTubeConfig
 from memory_guard import MemoryGuard, MemoryPressureError
 from state import StateStore
+from title_cleaner import YOUTUBE_TITLE_MAX_LENGTH, sanitize_youtube_title
 from uploaders.base import BaseUploader, UploadResult
 from youtube_api import SCOPES, YouTubeApiClient
 
@@ -90,12 +91,8 @@ def _friendly_youtube_error(error: Exception) -> str:
     return f"YouTube API HTTP {status}: {reason or error}"
 
 
-def _normalize_youtube_title(title: str) -> str:
-    return title.replace("<", "‹").replace(">", "›").strip()
-
-
 def youtube_title_rejection_key(title: str) -> str:
-    digest = hashlib.sha256(_normalize_youtube_title(title).encode("utf-8", "surrogatepass")).hexdigest()
+    digest = hashlib.sha256(sanitize_youtube_title(title).strip().encode("utf-8")).hexdigest()
     return f"[YOUTUBE_TITLE:{digest}] "
 
 
@@ -431,13 +428,8 @@ class YouTubeUploader(BaseUploader):
         video = Path(video_path)
         if not video.is_file():
             return UploadResult(False, error_message=f"Video file was not found: {video}")
-        title = _normalize_youtube_title(title)
-        try:
-            title.encode("utf-8")
-            valid = 0 < len(title) <= min(self.config.title_limit, 100) and "\x00" not in title
-        except UnicodeEncodeError:
-            valid = False
-        if not valid:
+        title = sanitize_youtube_title(title).strip()
+        if not 0 < len(title) <= min(self.config.title_limit, YOUTUBE_TITLE_MAX_LENGTH):
             return UploadResult(
                 False,
                 error_message=youtube_title_rejection_key(title) + "Invalid YouTube title",

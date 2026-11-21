@@ -533,6 +533,7 @@ def _process_multipart_platform(
             _platform_title_limit(config, platform),
             part.index,
             total,
+            youtube=platform == "youtube",
         )
         if platform == "youtube" and (record.last_error or "").startswith(
             youtube_title_rejection_key(title)
@@ -866,6 +867,7 @@ def process_ready_recording(
                 metadata,
                 config.metadata.title_template,
                 _platform_title_limit(config, platform),
+                youtube=platform == "youtube",
             )
             if (
                 platform == "youtube"

@@ -90,6 +90,29 @@ class BuildFinalTitleTests(unittest.TestCase):
             "Stream mrozopl 2026-07-12 | mrozopl | 2026-07-12",
         )
 
+    def test_youtube_cleans_metadata_and_template_before_building_titles(self) -> None:
+        metadata = StreamMetadata(
+            channel="channel",
+            title="Stream <3 -> 👩‍💻\x00\ud800 " + "long title " * 20,
+            game="Just Chatting",
+            started=datetime(2026, 7, 12, 17, 24, 22),
+            ended=datetime(2026, 7, 12, 20, 36, 32),
+            quality="best",
+            source_path=Path("stream_meta.txt"),
+        )
+        template = "<{clean_title}> | {channel}"
+        title = title_from_metadata(metadata, template, None, youtube=True)
+        part = title_from_metadata_part(metadata, template, 200, 2, 3, youtube=True)
+
+        for result in (title, part):
+            self.assertLessEqual(len(result), 100)
+            self.assertTrue(result.startswith("‹Stream ‹3 -› 👩‍💻 long title"))
+            self.assertNotIn("<", result)
+            self.assertNotIn(">", result)
+            self.assertNotIn("\x00", result)
+            result.encode("utf-8")
+        self.assertTrue(part.endswith("› | channel (Part 2/3)"))
+
     def test_multipart_suffix_is_reserved_inside_platform_limit(self) -> None:
         metadata = StreamMetadata(
             channel="mrozopl",
