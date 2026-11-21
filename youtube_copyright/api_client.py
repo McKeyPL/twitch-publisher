@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
+from threading import Event
 from typing import Any, Callable
+
+from googleapiclient.errors import HttpError
 
 from .detector import parse_iso8601_duration
 
@@ -24,14 +27,30 @@ class ApiVideo:
 
 
 class YouTubeCopyrightApi:
-    def __init__(self, service: Any, quota_callback: Callable[[int], None] | None = None) -> None:
+    def __init__(
+        self,
+        service: Any,
+        quota_callback: Callable[[int], None] | None = None,
+        *,
+        stop_event: Event | None = None,
+    ) -> None:
         self.service = service
         self.quota_callback = quota_callback
+        self.stop_event = stop_event or Event()
 
     def _execute(self, request: Any, *, quota_cost: int = 1) -> dict[str, Any]:
-        if self.quota_callback is not None:
-            self.quota_callback(quota_cost)
-        return request.execute()
+        for attempt in range(3):
+            if self.stop_event.is_set():
+                raise KeyboardInterrupt("Copyright Guard interrupted by the user")
+            if self.quota_callback is not None:
+                self.quota_callback(quota_cost)
+            try:
+                return request.execute()
+            except HttpError as error:
+                if attempt == 2 or not is_transient_api_error(error):
+                    raise
+                self.stop_event.wait(2 ** attempt)
+        raise AssertionError("Read retry loop exhausted")
 
     def list_uploaded_video_ids(self) -> list[str]:
         request = (
@@ -107,6 +126,10 @@ class YouTubeCopyrightApi:
                     )
                 )
         return results
+
+
+def is_transient_api_error(error: HttpError) -> bool:
+    return int(error.resp.status) in {500, 502, 503, 504}
 
 
 def _batches(values: list[str], size: int) -> Iterator[list[str]]:

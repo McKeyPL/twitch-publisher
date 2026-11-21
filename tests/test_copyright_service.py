@@ -626,3 +626,35 @@ def test_claim_selection_recognizes_current_english_blocking_phrases() -> None:
     )
 
     assert _select_claim(claims).claim.content_title == "Song C"
+
+
+def test_scheduled_scan_defers_omitted_ids_but_explicit_scan_can_recheck(tmp_path):
+    config = _config(tmp_path)
+    api_service = _service_for([])
+    with (
+        StateStore(config.paths.database) as quota_store,
+        CopyrightStateStore(config.paths.database) as copyright_store,
+    ):
+        guard = CopyrightGuardService(config, copyright_store, quota_store, api_service=api_service)
+        with patch.object(guard.api, "list_uploaded_video_ids", return_value=["missing"]):
+            assert guard.run_cycle().missing_video_ids == ("missing",)
+            assert guard.run_cycle().missing_video_ids == ()
+            assert api_service.videos.return_value.list.call_count == 1
+        assert guard.run_cycle(video_ids=["missing"]).missing_video_ids == ("missing",)
+
+
+def test_inventory_retries_transient_api_failure_and_reserves_each_attempt():
+    import httplib2
+    from googleapiclient.errors import HttpError
+    from youtube_copyright.api_client import YouTubeCopyrightApi
+
+    service = _service_for([])
+    execute = service.videos.return_value.list.return_value.execute
+    execute.side_effect = [HttpError(httplib2.Response({"status": "500"}), b"{}"), {"items": []}]
+    quota = MagicMock()
+    stop_event = MagicMock()
+    stop_event.is_set.return_value = False
+    api = YouTubeCopyrightApi(service, quota, stop_event=stop_event)
+    assert api.list_videos(["video"]) == []
+    assert quota.call_count == 2
+    stop_event.wait.assert_called_once_with(1)

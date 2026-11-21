@@ -10,12 +10,14 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable
 from zoneinfo import ZoneInfo
 
+from googleapiclient.errors import HttpError
+
 from config import Config
 from memory_guard import MemoryGuard, MemoryPressureError, mebibytes
 from state import StateStore
 from youtube_api import YouTubeApiClient
 
-from .api_client import YouTubeCopyrightApi
+from .api_client import YouTubeCopyrightApi, is_transient_api_error
 from .browser_session import StudioAuthRequired, StudioBrowserManager
 from .captions import CaptionBackup, CaptionTrack, CopyrightCaptionManager
 from .detector import classify_region_restriction
@@ -66,7 +68,7 @@ class CopyrightGuardService:
         self.stop_event = stop_event or threading.Event()
         self.memory_guard = memory_guard or MemoryGuard(config.memory)
         service = api_service or YouTubeApiClient(config.platforms.youtube).get_service()
-        self.api = YouTubeCopyrightApi(service, self._reserve_quota)
+        self.api = YouTubeCopyrightApi(service, self._reserve_quota, stop_event=self.stop_event)
 
     def _reserve_quota(self, cost: int) -> None:
         period = datetime.now(timezone.utc).astimezone(PACIFIC_TIME).date().isoformat()
@@ -113,7 +115,13 @@ class CopyrightGuardService:
                 explicit_count = 0
             channel_count = 0
             if include_channel_uploads and video_ids is None:
-                channel_video_ids = self.api.list_uploaded_video_ids()
+                try:
+                    channel_video_ids = self.api.list_uploaded_video_ids()
+                except HttpError as error:
+                    if not candidates or not is_transient_api_error(error):
+                        raise
+                    logger.warning("Channel inventory unavailable; continuing with publisher videos")
+                    channel_video_ids = []
                 channel_count = len(channel_video_ids)
                 candidates.update(
                     {
@@ -135,9 +143,16 @@ class CopyrightGuardService:
                         CopyrightVideo(video_id=video_id, source_video_path=source_path)
                     )
 
+            now = datetime.now(timezone.utc)
+            if video_ids is None:
+                due_ids = {item.video_id for item in self.copyright_store.list_due_videos(now)}
+                candidates = {
+                    video_id: source_path
+                    for video_id, source_path in candidates.items()
+                    if video_id in due_ids
+                }
             resources = self.api.list_videos(candidates)
             by_id = {resource.video_id: resource for resource in resources}
-            now = datetime.now(timezone.utc)
             next_check = now + timedelta(hours=self.config.youtube_copyright.interval_hours)
 
             for video_id, source_path in candidates.items():
@@ -153,7 +168,7 @@ class CopyrightGuardService:
                             state=VideoState.FAILED,
                             last_error="The authorized videos.list response omitted this video",
                             last_checked_at=now,
-                            next_check_at=next_check,
+                            next_check_at=max(next_check, now + timedelta(days=1)),
                         )
                     )
                     continue
@@ -180,7 +195,7 @@ class CopyrightGuardService:
             if missing:
                 logger.warning(
                     "YouTube videos.list omitted %d candidate(s); they were marked "
-                    "FAILED and will be checked again next cycle: %s",
+                    "FAILED and deferred for at least one day: %s",
                     len(missing),
                     ", ".join(missing),
                 )
@@ -198,6 +213,10 @@ class CopyrightGuardService:
                         ):
                             deferred = actionable[candidate_index + 1 :]
                             if deferred:
+                                for deferred_id in deferred:
+                                    self.copyright_store.update_video_state(
+                                        deferred_id, VideoState.ACTION_PENDING, next_check_at=now
+                                    )
                                 logger.info(
                                     "Studio action limit reached; deferring %d video(s) "
                                     "to the next cycle: %s",
@@ -261,6 +280,9 @@ class CopyrightGuardService:
             )
         if resource.rejection_reason in {"claim", "copyright"}:
             state = VideoState.MANUAL_REQUIRED
+        uncertain = latest_action is not None and latest_action.state is ActionState.UNCERTAIN
+        if decision.actionable and uncertain and not processing:
+            state = VideoState.MANUAL_REQUIRED
         self.copyright_store.upsert_video(
             CopyrightVideo(
                 video_id=video_id,
@@ -273,11 +295,16 @@ class CopyrightGuardService:
                 blocked_regions=decision.blocked_regions,
                 restriction_reasons=decision.reasons,
                 processing=processing,
+                last_error=(
+                    "Verify the previous uncertain Studio edit before retrying"
+                    if state is VideoState.MANUAL_REQUIRED and uncertain
+                    else None
+                ),
                 last_checked_at=now,
                 next_check_at=next_check,
             )
         )
-        if decision.actionable and not processing:
+        if decision.actionable and not processing and state is not VideoState.MANUAL_REQUIRED:
             logger.warning(
                 "YouTube video %s requires remediation: %s",
                 video_id,
