@@ -12,8 +12,8 @@ import yaml
 from config import ConfigError, config_from_dict, expand_environment_variables, load_config
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-CONFIG_PATH = PROJECT_ROOT / "config.yaml"
+FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
+CONFIG_PATH = FIXTURES_DIR / "config.yaml"
 
 
 def valid_raw_config() -> dict:
@@ -114,7 +114,7 @@ class ConfigValidationTests(unittest.TestCase):
             },
             clear=True,
         ):
-            config = load_config(CONFIG_PATH, dotenv_path=PROJECT_ROOT / "missing.env")
+            config = load_config(CONFIG_PATH, dotenv_path=FIXTURES_DIR / "missing.env")
 
         self.assertEqual(config.platforms.rumble.license_option, "6")
 
