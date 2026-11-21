@@ -67,7 +67,7 @@ while ($true) {
 
     & $python @arguments
     $exitCode = $LASTEXITCODE
-    if ($exitCode -eq 130) {
+    if ($exitCode -in @(130, -1073741510, 3221225786)) {
         Write-LauncherLog "copyright_guard.py was interrupted by the user; not restarting."
         exit 130
     }

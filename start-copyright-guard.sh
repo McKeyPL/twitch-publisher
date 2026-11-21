@@ -56,7 +56,7 @@ mkdir -p logs
 
 stop_child() {
     if [[ -n "$CHILD_PID" ]] && kill -0 "$CHILD_PID" 2>/dev/null; then
-        kill -INT "$CHILD_PID" 2>/dev/null || true
+        kill -TERM "$CHILD_PID" 2>/dev/null || true
         wait "$CHILD_PID" 2>/dev/null || true
     fi
     exit 130
@@ -90,5 +90,8 @@ while true; do
     if ((exit_code == 0)); then exit 0; fi
     if $ONCE || $LOGIN || ((${#RESET_VIDEO_IDS[@]})); then exit "$exit_code"; fi
     ((restart_count += 1))
-    sleep "$RESTART_DELAY"
+    sleep "$RESTART_DELAY" &
+    CHILD_PID=$!
+    wait "$CHILD_PID"
+    CHILD_PID=""
 done

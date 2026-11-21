@@ -8,6 +8,7 @@ import os
 import signal
 import sys
 import threading
+import time
 from dataclasses import replace
 from pathlib import Path
 from typing import Callable, Sequence
@@ -41,11 +42,17 @@ def _force_exit_if_stuck(
 
     if shutdown_complete.wait(timeout_seconds):
         return
-    logger.critical(
-        "Copyright Guard did not stop within %.1f s after Ctrl+C; forcing exit",
-        timeout_seconds,
-    )
+    # A blocked log handler must not prevent the watchdog from exiting.
     (exit_function or os._exit)(130)
+
+
+def _wait_between_cycles(stop_event: threading.Event, seconds: float) -> None:
+    """Return to Python regularly so Windows can deliver a pending Ctrl+C."""
+    deadline = time.monotonic() + seconds
+    while not stop_event.is_set():
+        remaining = deadline - time.monotonic()
+        if remaining <= 0 or stop_event.wait(min(0.25, remaining)):
+            return
 
 
 def configure_logging(config: Config) -> None:
@@ -104,10 +111,7 @@ def run(
     def request_stop(signum: int, frame: object) -> None:
         nonlocal interrupt_count
         interrupt_count += 1
-        logger.info("Received signal %s; stopping the copyright guard", signum)
-        stop_event.set()
         if interrupt_count >= 2:
-            logger.critical("Received a second stop signal; forcing immediate exit")
             os._exit(130)
         threading.Thread(
             target=_force_exit_if_stuck,
@@ -117,7 +121,7 @@ def run(
         ).start()
         raise KeyboardInterrupt
 
-    for signal_name in ("SIGINT", "SIGTERM"):
+    for signal_name in ("SIGINT", "SIGTERM", "SIGBREAK"):
         if hasattr(signal, signal_name):
             signal.signal(getattr(signal, signal_name), request_stop)
 
@@ -144,7 +148,7 @@ def run(
                         if not _disk_space.allows_large_writes(config.youtube_copyright.diagnostics.directory.parent):
                             if once:
                                 return 1
-                            stop_event.wait(config.youtube_copyright.interval_hours * 3600)
+                            _wait_between_cycles(stop_event, config.youtube_copyright.interval_hours * 3600)
                             continue
                         result = service.run_cycle(
                             video_ids=video_ids or None,
@@ -199,8 +203,9 @@ def run(
                             return 1
                     if once:
                         return 0
-                    stop_event.wait(config.youtube_copyright.interval_hours * 3600)
+                    _wait_between_cycles(stop_event, config.youtube_copyright.interval_hours * 3600)
         except KeyboardInterrupt:
+            stop_event.set()
             logger.info("Copyright Guard was interrupted by the user")
             return 130
         return 0

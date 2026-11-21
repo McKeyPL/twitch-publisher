@@ -79,3 +79,16 @@ def test_guard_returns_exit_130_after_keyboard_interrupt(tmp_path: Path) -> None
         assert run(config, once=False) == 130
 
     service.run_cycle.assert_called_once()
+
+
+def test_long_cycle_wait_checks_for_signals_in_short_slices() -> None:
+    from copyright_guard import _wait_between_cycles
+
+    stop_event = Mock()
+    stop_event.is_set.return_value = False
+    stop_event.wait.side_effect = [False, True]
+
+    _wait_between_cycles(stop_event, 7200)
+
+    assert stop_event.wait.call_count == 2
+    assert all(call.args == (0.25,) for call in stop_event.wait.call_args_list)
