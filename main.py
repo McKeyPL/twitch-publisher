@@ -9,10 +9,12 @@ import logging
 import signal
 import sys
 import threading
+import time
 from dataclasses import replace
 from pathlib import Path
 from typing import Callable, Mapping, Sequence
 
+from log_limits import BoundedLogHandler, DiskSpaceMonitor, prune_browser_artifacts
 from config import Config, load_config
 from duration_check import (
     FileSizeStabilityTracker,
@@ -43,6 +45,7 @@ from youtube_copyright.process_lock import GuardAlreadyRunning, SingleInstanceLo
 
 logger = logging.getLogger(__name__)
 DurationProbe = Callable[[Path], float]
+_disk_space = DiskSpaceMonitor()
 NO_AUTO_RETRY_PREFIX = "[NO_AUTO_RETRY] "
 
 
@@ -84,9 +87,8 @@ def configure_logging(config: Config) -> None:
     )
     console = logging.StreamHandler()
     console.setFormatter(_ColorFormatter(formatter._fmt, datefmt=formatter.datefmt) if config.logging.console_colors else formatter)
-    file_handler = logging.FileHandler(
+    file_handler = BoundedLogHandler(
         config.paths.log_directory / config.logging.file_name,
-        encoding="utf-8",
     )
     file_handler.setFormatter(formatter)
     root = logging.getLogger()
@@ -1062,9 +1064,14 @@ def run(
             memory_debug=memory_debug,
         )
         tracker = FileSizeStabilityTracker(config.watcher.size_stability_seconds)
+        next_diagnostics_prune = 0.0
         try:
             while not stop_event.is_set():
                 try:
+                    now = time.monotonic()
+                    if now >= next_diagnostics_prune:
+                        prune_browser_artifacts(config.browser.debug_directory)
+                        next_diagnostics_prune = now + 3600
                     run_cycle(config, store, tracker, uploaders)
                 except MemoryPressureError as exc:
                     logger.warning("Cycle paused by memory guard: %s", exc)

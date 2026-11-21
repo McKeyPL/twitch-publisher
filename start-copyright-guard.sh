@@ -64,9 +64,13 @@ stop_child() {
 trap stop_child INT TERM
 
 restart_count=0
+launcher_log="logs/start_copyright_guard_sh.log"
 while true; do
+    if [[ -f "$launcher_log" ]] && [[ $(wc -c <"$launcher_log") -ge 1048576 ]]; then
+        mv -f -- "$launcher_log" "$launcher_log.1" || launcher_log=/dev/null
+    fi
     printf '%s Starting copyright_guard.py (restart number %d).\n' \
-        "$(date '+%Y-%m-%d %H:%M:%S')" "$restart_count" | tee -a logs/start_copyright_guard_sh.log
+        "$(date '+%Y-%m-%d %H:%M:%S')" "$restart_count" | tee -a "$launcher_log" || true
     args=(copyright_guard.py --config "$CONFIG")
     $ONCE && args+=(--once)
     $DRY_RUN && args+=(--dry-run)

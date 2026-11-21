@@ -14,6 +14,7 @@ from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 from config import CopyrightDiagnosticsConfig
+from log_limits import DIAGNOSTIC_MAX_BYTES
 
 
 logger = logging.getLogger(__name__)
@@ -97,14 +98,33 @@ def prune_diagnostics(config: CopyrightDiagnosticsConfig) -> list[Path]:
         logger.warning("Refusing to prune unmarked diagnostics directory: %s", root)
         return []
     cutoff = datetime.now(timezone.utc) - timedelta(days=config.retention_days)
-    removed: list[Path] = []
+    runs = []
     for child in root.iterdir():
-        if not child.is_dir():
+        if child.is_symlink() or not child.is_dir():
             continue
         if not (child / ".copyright_guard_run").is_file():
             continue
-        modified = datetime.fromtimestamp(child.stat().st_mtime, timezone.utc)
-        if modified < cutoff:
+        try:
+            size = sum(
+                entry.stat().st_size
+                for entry in child.rglob("*")
+                if not entry.is_symlink() and entry.is_file()
+            )
+            modified = datetime.fromtimestamp(child.stat().st_mtime, timezone.utc)
+        except OSError:
+            logger.warning("Could not inspect diagnostics run %s", child, exc_info=True)
+            continue
+        runs.append((modified, child, size))
+    total = sum(size for _, _, size in runs)
+    removed: list[Path] = []
+    for modified, child, size in sorted(runs):
+        if modified >= cutoff and total <= DIAGNOSTIC_MAX_BYTES:
+            break
+        try:
             shutil.rmtree(child)
-            removed.append(child)
+        except OSError:
+            logger.warning("Could not prune diagnostics run %s", child, exc_info=True)
+            continue
+        total -= size
+        removed.append(child)
     return removed

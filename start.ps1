@@ -45,7 +45,14 @@ $forwardedOnce = $ForwardedArguments -contains "--once"
 function Write-LauncherLog {
     param([Parameter(Mandatory = $true)][string]$Message)
     $line = "{0} {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $Message
-    Add-Content -LiteralPath $launcherLog -Value $line -Encoding UTF8
+    try {
+        if ((Test-Path -LiteralPath $launcherLog) -and (Get-Item -LiteralPath $launcherLog).Length -ge 1MB) {
+            Move-Item -LiteralPath $launcherLog -Destination "${launcherLog}.1" -Force -ErrorAction Stop
+        }
+        Add-Content -LiteralPath $launcherLog -Value $line -Encoding UTF8 -ErrorAction Stop
+    } catch {
+        Write-Warning "Could not write launcher log: $_"
+    }
     Write-Host $line -ForegroundColor Cyan
 }
 

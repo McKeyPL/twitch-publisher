@@ -97,7 +97,10 @@ RESTART_COUNT=0
 launcher_log() {
     local line
     line="$(date '+%Y-%m-%d %H:%M:%S') $*"
-    printf '%s\n' "$line" >>"$LAUNCHER_LOG"
+    if [[ -f "$LAUNCHER_LOG" ]] && [[ $(wc -c <"$LAUNCHER_LOG") -ge 1048576 ]]; then
+        mv -f -- "$LAUNCHER_LOG" "$LAUNCHER_LOG.1" || return 0
+    fi
+    printf '%s\n' "$line" >>"$LAUNCHER_LOG" || true
     color 36 "$line"
 }
 

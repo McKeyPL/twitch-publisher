@@ -12,6 +12,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Callable, Sequence
 
+from log_limits import BoundedLogHandler, DiskSpaceMonitor
 from config import Config, load_config
 from memory_guard import MemoryGuard, MemoryPressureError, mebibytes
 from state import StateStore
@@ -27,6 +28,7 @@ from youtube_copyright.process_lock import GuardAlreadyRunning, SingleInstanceLo
 
 
 logger = logging.getLogger(__name__)
+_disk_space = DiskSpaceMonitor()
 _FORCED_STOP_TIMEOUT_SECONDS = 5.0
 
 
@@ -55,8 +57,8 @@ def configure_logging(config: Config) -> None:
     )
     console = logging.StreamHandler()
     console.setFormatter(formatter)
-    file_handler = logging.FileHandler(
-        config.paths.log_directory / "youtube_copyright_guard.log", encoding="utf-8"
+    file_handler = BoundedLogHandler(
+        config.paths.log_directory / "youtube_copyright_guard.log"
     )
     file_handler.setFormatter(formatter)
     root = logging.getLogger()
@@ -139,6 +141,11 @@ def run(
                 )
                 while not stop_event.is_set():
                     try:
+                        if not _disk_space.allows_large_writes(config.youtube_copyright.diagnostics.directory.parent):
+                            if once:
+                                return 1
+                            stop_event.wait(config.youtube_copyright.interval_hours * 3600)
+                            continue
                         result = service.run_cycle(
                             video_ids=video_ids or None,
                             include_channel_uploads=not video_ids,
