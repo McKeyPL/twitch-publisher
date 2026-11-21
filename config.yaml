@@ -1,25 +1,21 @@
 # Paths may be overridden by CLI options added by future stages.
 paths:
-  recordings_root: '${RECORDINGS_ROOT:-E:\TwitchRecordings}'
-  ffmpeg: ffmpeg
-  ffprobe: ffprobe
+  recordings_root: 'E:\TwitchRecordings\'
+  ffmpeg: 'C:\ProgramData\chocolatey\bin\ffmpeg.exe'
+  ffprobe: 'C:\ProgramData\chocolatey\bin\ffprobe.exe'
   database: data/upload_state.sqlite3
   log_directory: logs
   auth_directory: auth
 
 watcher:
-  poll_interval_seconds: 30
+  poll_interval_seconds: 5
   # The second MKV size sample must occur at least this many seconds later.
-  size_stability_seconds: 60
+  size_stability_seconds: 10
 
-# The Windows guard uses system commit (Committed Bytes / Commit Limit), not
-# merely Task Manager's Available RAM. The larger of the absolute and percentage
-# floors protects both an 8 GiB server and a large Hyper-V host. Operation
-# reserves are bounded budgets independent of VOD file size because uploads stream.
 memory:
   enabled: true
   minimum_commit_headroom_gb: 0.75
-  minimum_commit_headroom_percent: 10
+  minimum_commit_headroom_percent: 5
   minimum_physical_available_gb: 0.75
   minimum_physical_available_percent: 2
   check_interval_seconds: 5
@@ -33,7 +29,7 @@ platforms:
     # An empty value is allowed only when enabled=false; config.py validates it.
     client_secrets_file: ${YOUTUBE_CLIENT_SECRETS_FILE:-}
     token_file: auth/youtube_token.json
-    privacy_status: unlisted
+    privacy_status: public
     max_duration_hours: 12
     # Verified YouTube hard limit: 256 GB or 12 hours, whichever comes first.
     max_file_size_gb: 256
@@ -55,6 +51,15 @@ platforms:
       jalowy_gracz: ${YT_PLAYLIST_JALOWY_GRACZ:-}
       perrydotto: ${YT_PLAYLIST_PERRYDOTTO:-}
       buvanybu: ${YT_PLAYLIST_BUVANYBU:-}
+      ponyconholland: ${YT_PLAYLIST_PONYCONHOLLAND:-}
+      cfm_official: ${YT_PLAYLIST_CFM_OFFICIAL:-}
+      "4everfreepatreon": ${YT_PLAYLIST_4EVERFREEPATREON:-}
+      "4everfreebrony": ${YT_PLAYLIST_4EVERFREEBRONY:-}
+      czskbronies: ${YT_PLAYLIST_CZSKBRONIES:-}
+      skaiwolfu: ${YT_PLAYLIST_SKAIWOLFIX:-}
+      kot_of_eden: ${YT_PLAYLIST_KOTOFEDEN:-}
+      flitterkriz: ${YT_PLAYLIST_FLITTER:-}
+      EBS: ${YT_PLAYLIST_EBS:-}
 
   cda:
     enabled: true
@@ -110,8 +115,6 @@ browser:
   debug_directory: logs/browser_debug
   debug_screenshot_interval_seconds: 300
 
-# Standalone YouTube Studio copyright-remediation process. It is never started
-# by main.py; use start-copyright-guard.ps1 or start-copyright-guard.sh.
 youtube_copyright:
   enabled: true
   interval_hours: 2
@@ -150,13 +153,14 @@ youtube_copyright:
     directory: logs/youtube_copyright
     retention_days: 14
 
+
 metadata:
   title_template: '{clean_title} | {channel} | {date_YYYY-MM-DD}'
   remove_bang_tags: true
 
 retry:
-  max_attempts: 3
-  initial_backoff_seconds: 5
+  max_attempts: 5
+  initial_backoff_seconds: 10
   multiplier: 2
   max_backoff_seconds: 60
 
