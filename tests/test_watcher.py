@@ -98,3 +98,20 @@ def test_video_directly_in_root_does_not_require_folder_channel(tmp_path: Path) 
     make_recording(tmp_path, "root_stream", channel="any_channel")
     results = scan_cycle(tmp_path, FileSizeStabilityTracker(1), "_uploaded", now=0)
     assert results[0].status is ReadinessStatus.SIZE_CHECK_PENDING
+
+
+def test_old_twitch_name_is_normalized_without_accepting_unrelated_channels(tmp_path):
+    folder = tmp_path / "skaiwolfu"
+    make_recording(folder, "old_stream", channel="SkaiWolfix")
+    make_recording(folder, "unrelated", channel="other_channel")
+    tracker = FileSizeStabilityTracker(1)
+    aliases = {"skaiwolfix": "skaiwolfu"}
+
+    scan_cycle(tmp_path, tracker, "_uploaded", channel_aliases=aliases, now=0)
+    known, unrelated = scan_cycle(
+        tmp_path, tracker, "_uploaded", channel_aliases=aliases, now=1
+    )
+
+    assert known.status is ReadinessStatus.READY
+    assert known.metadata.channel == "skaiwolfu"
+    assert unrelated.status is ReadinessStatus.META_INVALID

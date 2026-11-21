@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Mapping
 from pathlib import Path
 
 from duration_check import (
@@ -79,6 +79,7 @@ def scan_cycle(
     *,
     excluded_directory_names: Iterable[str] = (),
     expected_channel: str | None = None,
+    channel_aliases: Mapping[str, str] | None = None,
     now: float | None = None,
 ) -> list[ReadinessResult]:
     """Check every candidate once and include non-ready results."""
@@ -96,6 +97,7 @@ def scan_cycle(
             video_path,
             tracker,
             expected_channel=channel,
+            channel_aliases=channel_aliases,
             now=now,
         )
         results.append(result)

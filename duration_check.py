@@ -7,6 +7,7 @@ import subprocess
 import time
 from dataclasses import dataclass
 from enum import Enum
+from collections.abc import Mapping
 from pathlib import Path
 
 from meta_parser import MetadataError, StreamMetadata, meta_path_for_video, parse_meta_file
@@ -81,6 +82,7 @@ def check_recording_readiness(
     tracker: FileSizeStabilityTracker,
     *,
     expected_channel: str | None = None,
+    channel_aliases: Mapping[str, str] | None = None,
     now: float | None = None,
 ) -> ReadinessResult:
     """Check the MKV, metadata, Ended field, and stable MKV size in order."""
@@ -98,7 +100,9 @@ def check_recording_readiness(
         )
 
     try:
-        metadata = parse_meta_file(meta_path, expected_channel=expected_channel)
+        metadata = parse_meta_file(
+            meta_path, expected_channel=expected_channel, channel_aliases=channel_aliases
+        )
     except MetadataError as exc:
         tracker.forget(video)
         return ReadinessResult(ReadinessStatus.META_INVALID, str(exc))

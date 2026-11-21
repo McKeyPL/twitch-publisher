@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -72,6 +73,7 @@ def parse_meta_file(
     path: str | Path,
     *,
     expected_channel: str | None = None,
+    channel_aliases: Mapping[str, str] | None = None,
 ) -> StreamMetadata:
     """Parse metadata and optionally validate the channel against its folder."""
     source_path = Path(path)
@@ -86,6 +88,12 @@ def parse_meta_file(
         raise MetadataError(f"Required fields are missing: {', '.join(missing)}")
 
     channel = values["channel"].strip()
+    if channel_aliases:
+        channel = channel_aliases.get(channel.casefold(), channel)
+        if expected_channel:
+            expected_channel = channel_aliases.get(
+                expected_channel.strip().casefold(), expected_channel
+            )
     if expected_channel and channel.casefold() != expected_channel.strip().casefold():
         raise MetadataError(
             f"Channel {channel!r} does not match folder {expected_channel!r}"

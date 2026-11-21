@@ -81,6 +81,7 @@ class PathsConfig:
 class WatcherConfig:
     poll_interval_seconds: float
     size_stability_seconds: float
+    channel_aliases: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -575,6 +576,13 @@ def config_from_dict(raw: Mapping[str, Any]) -> Config:
                 _required(watcher, "size_stability_seconds", "watcher"),
                 "watcher.size_stability_seconds",
             ),
+            channel_aliases={
+                _string(alias, "watcher.channel_aliases key").strip().casefold():
+                _string(channel, f"watcher.channel_aliases.{alias}").strip()
+                for alias, channel in _mapping(
+                    watcher.get("channel_aliases", {}), "watcher.channel_aliases"
+                ).items()
+            },
         ),
         memory=MemoryConfig(
             enabled=_boolean(memory.get("enabled", True), "memory.enabled"),

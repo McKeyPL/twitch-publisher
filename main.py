@@ -1025,6 +1025,7 @@ def run_cycle(
         tracker,
         config.moving.uploaded_directory_name,
         excluded_directory_names=[config.splitting.work_directory_name],
+        channel_aliases=config.watcher.channel_aliases,
         now=now,
     )
     ready_count = sum(
