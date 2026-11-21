@@ -386,6 +386,17 @@ def _read_cda_upload_status(page: object) -> dict[str, Any]:
     return dict(result or {})
 
 
+def _cda_transferred_bytes(value: str | None) -> float | None:
+    if not value:
+        return None
+    match = re.fullmatch(r"([0-9]+(?:[.,][0-9]+)?)\s*([KMGTPE]?)I?B", value.upper())
+    if not match:
+        return None
+    magnitude, unit = match.groups()
+    scale = " KMGTPE".index(unit or " ")
+    return float(magnitude.replace(",", ".")) * 1024**scale
+
+
 def _wait_for_cda_upload_complete(
     page: object,
     *,
@@ -408,7 +419,8 @@ def _wait_for_cda_upload_complete(
     started = time.monotonic()
     deadline = started + timeout_ms / 1000
     next_heartbeat = started
-    last_progress_signature: tuple[Any, ...] | None = None
+    max_percent = -1.0
+    max_transferred = -1.0
     last_progress_at = started
     while True:
         if cancel_check is not None:
@@ -443,30 +455,24 @@ def _wait_for_cda_upload_complete(
             )
             return status
         now = time.monotonic()
-        transfer_signal = (
-            status.get("percent"),
-            status.get("transferred"),
-            status.get("total"),
-            status.get("transfer_text"),
+        percent = status.get("percent")
+        transferred = _cda_transferred_bytes(status.get("transferred"))
+        has_transfer_signal = percent is not None or transferred is not None
+        advanced = (percent is not None and percent > max_percent) or (
+            transferred is not None and transferred > max_transferred
         )
-        has_transfer_signal = any(value is not None for value in transfer_signal)
-        if has_transfer_signal:
-            if transfer_signal != last_progress_signature:
-                last_progress_signature = transfer_signal
-                last_progress_at = now
-            elif now - last_progress_at >= stall_timeout_ms / 1000:
-                raise BrowserUploadError(
-                    "CDA upload transfer stalled: the reported progress has not "
-                    f"changed for {now - last_progress_at:.0f} s",
-                    retriable=True,
-                )
-        elif last_progress_signature is not None:
+        if advanced:
+            if percent is not None:
+                max_percent = max(max_percent, percent)
+            if transferred is not None:
+                max_transferred = max(max_transferred, transferred)
+            last_progress_at = now
+        elif max_percent >= 0 or max_transferred >= 0:
             stalled_for = now - last_progress_at
             if stalled_for >= stall_timeout_ms / 1000:
+                detail = "progress has not changed" if has_transfer_signal else "no progress was reported"
                 raise BrowserUploadError(
-                    "CDA upload transfer stalled: no progress was reported for "
-                    f"{stalled_for:.0f} s; the metadata form is not proof that "
-                    "the complete video was received",
+                    f"CDA upload transfer stalled: {detail} for {stalled_for:.0f} s",
                     retriable=True,
                 )
         elif now - started >= start_timeout_ms / 1000:

@@ -759,6 +759,11 @@ def process_ready_recording(
     for platform, uploader in uploaders.items():
         try:
             current = state_store.get_status(video_path, platform)
+            if platform == "cda" and current is not None and current.status is UploadStatus.IN_PROGRESS:
+                error = NO_AUTO_RETRY_PREFIX + "A previous CDA upload was interrupted; verify publication before retrying."
+                state_store.mark_failed(video_path, platform, error)
+                logger.warning("cda: %s (%s)", error, video_path)
+                continue
             needs_multipart = _requires_multipart(
                 video_path,
                 duration_seconds,

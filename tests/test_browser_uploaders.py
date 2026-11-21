@@ -633,7 +633,11 @@ def test_cda_upload_wait_detects_unchanged_progress(monkeypatch) -> None:
         clock[0] += 1.0
         return clock[0]
 
-    monkeypatch.setattr(cda_module, "_read_cda_upload_status", lambda page: status)
+    def read_status(page):
+        status["transfer_text"] = f"13% transfer at {clock[0]} Mbit/s"
+        return status
+
+    monkeypatch.setattr(cda_module, "_read_cda_upload_status", read_status)
     monkeypatch.setattr(cda_module.time, "monotonic", monotonic)
     monkeypatch.setattr(cda_module.time, "sleep", lambda seconds: None)
 
