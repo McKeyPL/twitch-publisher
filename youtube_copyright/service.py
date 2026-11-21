@@ -311,6 +311,13 @@ class CopyrightGuardService:
                 ", ".join(decision.reasons),
             )
             return True
+        if state is VideoState.MANUAL_REQUIRED:
+            logger.warning(
+                "YouTube video %s requires manual verification: %s",
+                video_id,
+                "previous Studio edit has an uncertain outcome" if uncertain else "copyright rejection",
+            )
+            return False
         logger.info(
             "YouTube video %s requires no action: %s",
             video_id,
