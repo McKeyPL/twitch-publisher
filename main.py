@@ -567,7 +567,7 @@ def _process_multipart_platform(
             title,
             description,
             build_tags(metadata),
-            part.srt_path,
+            part.srt_path if platform == "youtube" else None,
         )
         if result.skipped:
             reason = (
@@ -784,6 +784,12 @@ def process_ready_recording(
                 or current.status is not UploadStatus.SUCCESS
                 or bool(existing_parts)
             ):
+                # Keep the subtitle references used by existing split manifests.
+                plan_srt = (
+                    srt_path
+                    if platform == "youtube" or any(part.srt_path for part in existing_parts)
+                    else None
+                )
                 complete, plan = _process_multipart_platform(
                     video_path,
                     metadata,
@@ -793,7 +799,7 @@ def process_ready_recording(
                     platform,
                     uploader,
                     media_splitter,
-                    srt_path,
+                    plan_srt,
                 )
                 multipart_plans.append(plan)
                 if platform == "youtube" and not complete:
@@ -876,7 +882,9 @@ def process_ready_recording(
             ):
                 continue
             state_store.mark_in_progress(video_path, platform)
-            result = uploader.upload(video_path, title, description, tags, srt_path)
+            result = uploader.upload(
+                video_path, title, description, tags, srt_path if platform == "youtube" else None
+            )
             if result.skipped:
                 reason = result.error_message or f"{platform} intentionally skipped the upload"
                 state_store.mark_skipped(video_path, platform, reason)

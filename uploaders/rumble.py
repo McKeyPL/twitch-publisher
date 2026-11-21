@@ -21,11 +21,10 @@ from uploaders.browser_form import (
     UPLOAD_TIMEOUT_MS,
     capture_browser_debug,
     optional_visible_locator,
-    report_manual_captions,
     should_retry_browser_error,
     unique_locator,
     unique_visible_locator,
-    validate_upload_files,
+    validate_upload_video,
     video_id_from_url,
     visible_error_text,
     wait_for_visible_with_heartbeat,
@@ -300,7 +299,7 @@ class RumbleUploader(BaseUploader):
         srt_path: Path | None = None,
     ) -> UploadResult:
         try:
-            validate_upload_files(video_path, srt_path)
+            validate_upload_video(video_path)
             license_option = self.config.license_option
             if license_option not in LICENSE_LABELS:
                 allowed = ", ".join(
@@ -320,7 +319,7 @@ class RumbleUploader(BaseUploader):
                         retriable=False,
                     )
             return self._with_retry(
-                lambda: self._upload_once(video_path, title, description, tags, srt_path),
+                lambda: self._upload_once(video_path, title, description, tags),
                 operation_name=f"upload {video_path.name}",
                 should_retry=should_retry_browser_error,
             )
@@ -361,7 +360,6 @@ class RumbleUploader(BaseUploader):
         title: str,
         description: str,
         tags: list[str],
-        srt_path: Path | None,
     ) -> UploadResult:
         with self._session_manager.open(
             "rumble", self.config, self._is_authenticated
@@ -408,7 +406,6 @@ class RumbleUploader(BaseUploader):
                         game,
                     )
 
-            report_manual_captions("rumble", srt_path)
             unique_visible_locator(page, ("#submitForm",), "Upload button").click()
 
             # Rumble presents a second rights/license step. Descriptive fields are

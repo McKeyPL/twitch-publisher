@@ -20,11 +20,10 @@ from uploaders.browser_form import (
     BrowserUploadError,
     capture_browser_debug,
     optional_visible_locator,
-    report_manual_captions,
     should_retry_browser_error,
     unique_locator,
     unique_visible_locator,
-    validate_upload_files,
+    validate_upload_video,
     video_id_from_url,
 )
 
@@ -752,9 +751,9 @@ class CDAUploader(BaseUploader):
         srt_path: Path | None = None,
     ) -> UploadResult:
         try:
-            validate_upload_files(video_path, srt_path)
+            validate_upload_video(video_path)
             return self._with_retry(
-                lambda: self._upload_once(video_path, title, description, tags, srt_path),
+                lambda: self._upload_once(video_path, title, description, tags),
                 operation_name=f"upload {video_path.name}",
                 should_retry=should_retry_browser_error,
             )
@@ -774,7 +773,6 @@ class CDAUploader(BaseUploader):
         title: str,
         description: str,
         tags: list[str],
-        srt_path: Path | None,
     ) -> UploadResult:
         with self._session_manager.open("cda", self.config, self._is_authenticated) as session:
             page = session.page
@@ -983,7 +981,6 @@ class CDAUploader(BaseUploader):
                         retriable=False,
                     )
 
-            report_manual_captions("cda", srt_path)
             _dismiss_cda_consent_overlay(page)
             submit = _find_cda_submit_button(page)
             logger.info(

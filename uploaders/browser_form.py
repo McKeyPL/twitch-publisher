@@ -184,21 +184,9 @@ def capture_browser_debug(
         return None
 
 
-def validate_upload_files(video_path: Path, srt_path: Path | None) -> None:
+def validate_upload_video(video_path: Path) -> None:
     if not video_path.is_file():
         raise BrowserUploadError(f"Video file does not exist: {video_path}", retriable=False)
-    if srt_path is not None and not srt_path.is_file():
-        raise BrowserUploadError(f"SRT file does not exist: {srt_path}", retriable=False)
-
-
-def report_manual_captions(platform: str, srt_path: Path | None) -> None:
-    if srt_path is None or srt_path.stat().st_size == 0:
-        return
-    logger.warning(
-        "%s: the form has no SRT field; captions require manual addition: %s",
-        platform,
-        srt_path,
-    )
 
 
 def wait_for_visible_with_heartbeat(

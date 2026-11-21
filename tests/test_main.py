@@ -793,3 +793,29 @@ def test_youtube_quota_pause_leaves_other_platforms_running(
         assert not store.get_part_statuses(video, "youtube")
         assert store.get_status(video, "cda").status is UploadStatus.SUCCESS
         assert store.get_status(video, "rumble").status is UploadStatus.SUCCESS
+
+
+@pytest.mark.parametrize("multipart", [False, True])
+def test_only_youtube_receives_chat_subtitles(tmp_path, monkeypatch, multipart):
+    from unittest.mock import Mock
+
+    config = config_for(tmp_path, monkeypatch)
+    video, metadata = make_recording(config.paths.recordings_root)
+    uploaders = successful_uploaders(config)
+    for uploader in uploaders.values():
+        uploader.upload = Mock(wraps=uploader.upload)
+    monkeypatch.setattr(
+        "main._requires_multipart",
+        lambda path, duration, settings, platform: multipart and platform != "cda",
+    )
+
+    with StateStore(config.paths.database) as store:
+        process_ready_recording(
+            video, metadata, 3600, config, store, uploaders,
+            media_splitter=FakeMediaSplitter(),
+        )
+
+    for platform, uploader in uploaders.items():
+        calls = uploader.upload.call_args_list
+        assert len(calls) == (2 if multipart and platform != "cda" else 1)
+        assert all((call.args[-1] is not None) == (platform == "youtube") for call in calls)

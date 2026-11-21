@@ -306,8 +306,8 @@ Close Firefox before cookie import because its SQLite cookie database may be
 locked. After interactive login, storage state is saved for later runs. Storage
 state and OAuth files under `auth/` are ignored by Git and must never be committed.
 
-CDA and Rumble currently have no automated SRT field in the supported forms. The
-publisher logs the SRT path for manual addition.
+Chat SRT uploads are supported on YouTube only. The publisher keeps the original
+SRT alongside the recording when archiving it.
 
 ## CDA behavior
 
