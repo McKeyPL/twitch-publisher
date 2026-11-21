@@ -38,7 +38,7 @@ from title_cleaner import title_from_metadata, title_from_metadata_part
 from uploaders.base import BaseUploader
 from uploaders.cda import CDAUploader
 from uploaders.rumble import RumbleUploader, _is_file_size_limit_error
-from uploaders.youtube import YouTubeUploader
+from uploaders.youtube import YouTubeUploader, youtube_title_rejection_key
 from watcher import scan_cycle
 from youtube_copyright.process_lock import GuardAlreadyRunning, SingleInstanceLock
 
@@ -530,6 +530,10 @@ def _process_multipart_platform(
             part.index,
             total,
         )
+        if platform == "youtube" and (record.last_error or "").startswith(
+            youtube_title_rejection_key(title)
+        ):
+            continue
         description = build_part_description(
             metadata,
             duration_seconds,
@@ -846,6 +850,12 @@ def process_ready_recording(
                 config.metadata.title_template,
                 _platform_title_limit(config, platform),
             )
+            if (
+                platform == "youtube"
+                and current is not None
+                and (current.last_error or "").startswith(youtube_title_rejection_key(title))
+            ):
+                continue
             state_store.mark_in_progress(video_path, platform)
             result = uploader.upload(video_path, title, description, tags, srt_path)
             if result.skipped:

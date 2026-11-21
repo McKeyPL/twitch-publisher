@@ -485,3 +485,25 @@ def test_playlist_lookup_and_insert_reserve_general_quota(
         assert uploader.add_to_playlist("video-id", "playlist-id") is True
         period, _ = _pacific_quota_window()
         assert store.get_quota_usage("youtube_general", period) == 51
+
+
+def test_normalizes_final_youtube_title(tmp_path, youtube_config, retry_config):
+    video = make_video(tmp_path)
+    service = successful_video_service()
+    with StateStore(tmp_path / "state.sqlite3") as store:
+        uploader = YouTubeUploader(youtube_config, retry_config, store)
+        with patch.object(uploader, "_get_service", return_value=service):
+            assert uploader.upload(video, "Stream <3 -> Part 1", "Description", []).success
+
+    body = service.videos.return_value.insert.call_args.kwargs["body"]
+    assert body["snippet"]["title"] == "Stream ‹3 -› Part 1"
+
+
+def test_rejects_long_title_before_reserving_quota(tmp_path, youtube_config, retry_config):
+    video = make_video(tmp_path)
+    with StateStore(tmp_path / "state.sqlite3") as store:
+        uploader = YouTubeUploader(youtube_config, retry_config, store)
+        result = uploader.upload(video, "a" * 101, "Description", [])
+        assert not result.success
+        period, _ = _pacific_quota_window()
+        assert store.get_quota_usage("youtube_videos_insert", period) == 0

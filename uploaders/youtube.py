@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
@@ -85,6 +86,15 @@ def _friendly_youtube_error(error: Exception) -> str:
         return special_messages[reason]
     status = getattr(error.resp, "status", "?")
     return f"YouTube API HTTP {status}: {reason or error}"
+
+
+def _normalize_youtube_title(title: str) -> str:
+    return title.replace("<", "‹").replace(">", "›").strip()
+
+
+def youtube_title_rejection_key(title: str) -> str:
+    digest = hashlib.sha256(_normalize_youtube_title(title).encode("utf-8", "surrogatepass")).hexdigest()
+    return f"[YOUTUBE_TITLE:{digest}] "
 
 
 def _is_retriable_error(error: Exception) -> bool:
@@ -370,8 +380,17 @@ class YouTubeUploader(BaseUploader):
         video = Path(video_path)
         if not video.is_file():
             return UploadResult(False, error_message=f"Video file was not found: {video}")
-        if not title.strip():
-            return UploadResult(False, error_message="YouTube title cannot be empty")
+        title = _normalize_youtube_title(title)
+        try:
+            title.encode("utf-8")
+            valid = 0 < len(title) <= min(self.config.title_limit, 100) and "\x00" not in title
+        except UnicodeEncodeError:
+            valid = False
+        if not valid:
+            return UploadResult(
+                False,
+                error_message=youtube_title_rejection_key(title) + "Invalid YouTube title",
+            )
 
         try:
             # Run the commit-limit preflight before reserving API quota.
@@ -417,6 +436,8 @@ class YouTubeUploader(BaseUploader):
             raise
         except Exception as exc:
             message = _friendly_youtube_error(exc)
+            if isinstance(exc, HttpError) and _youtube_error_reason(exc) == "invalidTitle":
+                message = youtube_title_rejection_key(title) + message
             logger.exception("YouTube upload failed: %s", message)
             return UploadResult(False, error_message=message)
 
