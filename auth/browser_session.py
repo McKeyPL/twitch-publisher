@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import sqlite3
+import subprocess
+import sys
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -25,6 +28,35 @@ except ImportError:  # pragma: no cover
 
 logger = logging.getLogger(__name__)
 AuthCheck = Callable[[Any], bool]
+
+
+class _PlaywrightEventLoop(
+    asyncio.ProactorEventLoop if sys.platform == "win32" else asyncio.SelectorEventLoop
+):
+    async def subprocess_exec(self, protocol_factory, program, *args, **kwargs):
+        # Keep terminal Ctrl+C in the publisher. Playwright's driver otherwise
+        # handles the same signal by closing the browser and exiting.
+        if sys.platform == "win32":
+            kwargs["creationflags"] = (
+                kwargs.get("creationflags", 0) | subprocess.CREATE_NO_WINDOW
+            )
+        else:
+            kwargs["start_new_session"] = True
+        return await super().subprocess_exec(protocol_factory, program, *args, **kwargs)
+
+
+class _PlaywrightEventLoopPolicy(asyncio.DefaultEventLoopPolicy):
+    def new_event_loop(self) -> asyncio.AbstractEventLoop:
+        return _PlaywrightEventLoop()
+
+
+def _start_playwright() -> Any:
+    previous_policy = asyncio.get_event_loop_policy()
+    asyncio.set_event_loop_policy(_PlaywrightEventLoopPolicy())
+    try:
+        return sync_playwright().start()
+    finally:
+        asyncio.set_event_loop_policy(previous_policy)
 
 
 class BrowserSessionError(RuntimeError):
@@ -96,7 +128,7 @@ class BrowserSessionManager:
                 "playwright install firefox"
             )
 
-        playwright = sync_playwright().start()
+        playwright = _start_playwright()
         browser = None
         try:
             browser = playwright.firefox.launch(

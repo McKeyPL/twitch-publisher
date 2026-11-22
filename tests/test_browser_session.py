@@ -1,14 +1,37 @@
 from __future__ import annotations
 
+import asyncio
 from http.cookiejar import Cookie
 from pathlib import Path
+import subprocess
+import sys
+from unittest.mock import AsyncMock, patch
 
 from auth.browser_session import (
     AuthenticatedBrowserSession,
     BrowserSessionManager,
+    _PlaywrightEventLoop,
     _to_playwright_cookie,
 )
 from config import BrowserConfig
+
+
+def test_playwright_driver_is_isolated_from_console_interrupts() -> None:
+    loop = _PlaywrightEventLoop()
+    base_loop = _PlaywrightEventLoop.__bases__[0]
+    protocol_factory = asyncio.SubprocessProtocol
+    try:
+        with patch.object(base_loop, "subprocess_exec", new_callable=AsyncMock) as spawn:
+            loop.run_until_complete(loop.subprocess_exec(protocol_factory, "node", "run-driver"))
+    finally:
+        loop.close()
+
+    isolation = (
+        {"creationflags": subprocess.CREATE_NO_WINDOW}
+        if sys.platform == "win32"
+        else {"start_new_session": True}
+    )
+    spawn.assert_awaited_once_with(protocol_factory, "node", "run-driver", **isolation)
 
 
 def test_converts_firefox_cookie_to_playwright_format() -> None:
