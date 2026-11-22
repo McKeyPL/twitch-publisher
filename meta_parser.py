@@ -6,6 +6,13 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+import re
+
+
+_DOTNET_TIMESTAMP = re.compile(
+    r"([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{6})"
+    r"[0-9](Z|[+-][0-9]{2}:[0-9]{2})?"
+)
 
 
 class MetadataError(ValueError):
@@ -61,8 +68,14 @@ def _read_key_values(text: str) -> dict[str, str]:
 
 
 def _parse_datetime(value: str, field_name: str) -> datetime:
+    iso_value = value
+    match = _DOTNET_TIMESTAMP.fullmatch(value)
+    if match:
+        # .NET writes 100 ns ticks. Python datetime stores microseconds.
+        timestamp, offset = match.groups()
+        iso_value = timestamp + ("+00:00" if offset == "Z" else offset or "")
     try:
-        return datetime.fromisoformat(value)
+        return datetime.fromisoformat(iso_value)
     except ValueError as exc:
         raise MetadataError(
             f"Field {field_name!r} is not an ISO-8601 date: {value!r}"

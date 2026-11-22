@@ -11,6 +11,7 @@ def make_recording(
     stem: str,
     *,
     channel: str,
+    started: str = "2026-07-12T17:24:22",
     ended: str | None = "2026-07-12T20:36:32",
 ) -> Path:
     directory.mkdir(parents=True, exist_ok=True)
@@ -23,7 +24,7 @@ def make_recording(
                 f"Channel : {channel}",
                 "Title : Testowy stream",
                 "Game : Test: Game",
-                "Started : 2026-07-12T17:24:22",
+                f"Started : {started}",
                 f"Ended : {ended_value}",
                 "Quality : best",
             ]
@@ -44,6 +45,26 @@ def test_two_cycles_transition_from_pending_to_ready(tmp_path: Path) -> None:
     assert [result.status for result in second] == [ReadinessStatus.READY]
     assert second[0].metadata is not None
     assert second[0].metadata.source_path == video.with_name("stream_meta.txt")
+
+
+def test_dotnet_timestamps_are_accepted_by_the_watcher(tmp_path: Path) -> None:
+    make_recording(
+        tmp_path / "mrozopl",
+        "stream",
+        channel="mrozopl",
+        started="2026-11-21T17:14:38.7008675+01:00",
+        ended="2026-11-21T17:14:38.7008675Z",
+    )
+    tracker = FileSizeStabilityTracker(10)
+
+    first = scan_cycle(tmp_path, tracker, "_uploaded", now=100)
+    second = scan_cycle(tmp_path, tracker, "_uploaded", now=110)
+
+    assert first[0].status is ReadinessStatus.SIZE_CHECK_PENDING
+    assert second[0].status is ReadinessStatus.READY
+    assert second[0].metadata is not None
+    assert second[0].metadata.started.isoformat() == "2026-11-21T17:14:38.700867+01:00"
+    assert second[0].metadata.duration_seconds == 3600
 
 
 def test_missing_meta_does_not_block_other_files(tmp_path: Path) -> None:
