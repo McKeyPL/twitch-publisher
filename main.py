@@ -56,13 +56,15 @@ def _request_stop(
     signum: int,
     frame: object,
 ) -> None:
-    """SIGINT interrupts the active operation; SIGTERM stops after this step."""
-    if signum == getattr(signal, "SIGINT", None):
-        stop_event.set()
-        logger.info("Received SIGINT; interrupting the active operation")
+    """Finish the active upload on shutdown unless Ctrl+C is pressed again."""
+    if signum == signal.SIGINT and stop_event.is_set():
+        logger.info("Received another SIGINT; interrupting the active operation")
         raise KeyboardInterrupt
-    logger.info("Received signal %s; stopping after the current step", signum)
     stop_event.set()
+    logger.info(
+        "Received %s; stopping after the active upload finishes",
+        signal.Signals(signum).name,
+    )
 
 
 class _ColorFormatter(logging.Formatter):
@@ -709,6 +711,7 @@ def process_ready_recording(
     media_splitter: MediaSplitter | None = None,
     platform_batch: Mapping[str, BaseUploader] | None = None,
     finalize: bool = True,
+    stop_event: threading.Event | None = None,
 ) -> StreamMetadata:
     """Process one ready recording while isolating each platform."""
     batch = uploaders if platform_batch is None else platform_batch
@@ -760,6 +763,8 @@ def process_ready_recording(
     youtube_finalization_complete = True
 
     for platform, uploader in batch.items():
+        if stop_event is not None and stop_event.is_set():
+            break
         try:
             current = state_store.get_status(video_path, platform)
             if platform == "cda" and current is not None and current.status is UploadStatus.IN_PROGRESS:
@@ -999,6 +1004,7 @@ def process_readiness_results(
     uploaders: Mapping[str, BaseUploader],
     *,
     duration_probe: DurationProbe | None = None,
+    stop_event: threading.Event | None = None,
 ) -> None:
     probe = duration_probe or (
         lambda path: probe_duration_seconds(path, ffprobe_path=config.paths.ffprobe)
@@ -1017,13 +1023,15 @@ def process_readiness_results(
     for batch, finalize in batches:
         processed: list[tuple[StreamMetadata, float | None]] = []
         for metadata, duration in ready:
+            if stop_event is not None and stop_event.is_set():
+                return
             try:
                 video_path = _video_path_from_metadata(metadata)
                 if duration is None:
                     duration = probe(video_path)
                 metadata = process_ready_recording(
                     video_path, metadata, duration, config, state_store, uploaders,
-                    platform_batch=batch, finalize=finalize,
+                    platform_batch=batch, finalize=finalize, stop_event=stop_event,
                 )
                 if not finalize:
                     processed.append((metadata, duration))
@@ -1053,6 +1061,7 @@ def run_cycle(
     *,
     now: float | None = None,
     duration_probe: DurationProbe | None = None,
+    stop_event: threading.Event | None = None,
 ) -> list[ReadinessResult]:
     global _next_scan_summary
     logger.debug("Starting recording scan: %s", config.paths.recordings_root)
@@ -1078,7 +1087,8 @@ def run_cycle(
         )
         _next_scan_summary = summary_time + 900
     process_readiness_results(
-        results, config, state_store, uploaders, duration_probe=duration_probe
+        results, config, state_store, uploaders,
+        duration_probe=duration_probe, stop_event=stop_event,
     )
     return results
 
@@ -1131,8 +1141,7 @@ def run(
         uploaders = build_uploaders(
             config,
             store,
-            stop_event,
-            memory_guard,
+            memory_guard=memory_guard,
             memory_debug=memory_debug,
         )
         tracker = FileSizeStabilityTracker(config.watcher.size_stability_seconds)
@@ -1144,7 +1153,7 @@ def run(
                     if now >= next_diagnostics_prune:
                         prune_browser_artifacts(config.browser.debug_directory)
                         next_diagnostics_prune = now + 3600
-                    run_cycle(config, store, tracker, uploaders)
+                    run_cycle(config, store, tracker, uploaders, stop_event=stop_event)
                 except MemoryPressureError as exc:
                     logger.warning("Cycle paused by memory guard: %s", exc)
                 except MemoryError:
@@ -1162,6 +1171,9 @@ def run(
                 stop_event.wait(config.watcher.poll_interval_seconds)
         except KeyboardInterrupt:
             logger.info("Interrupted by the user")
+        else:
+            if stop_event.is_set():
+                logger.info("Publisher stopped after completing the active operation")
     return 0
 
 

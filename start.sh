@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 set -uo pipefail
+# Give the background publisher its own process group so only the launcher
+# receives terminal Ctrl+C and forwards it once.
+set -m
 
 PROJECT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG="config.yaml"
@@ -108,7 +111,7 @@ stop_child() {
     local signal_name="$1"
     launcher_log "Received $signal_name; stopping the active publisher process."
     if [[ -n "$CHILD_PID" ]] && kill -0 "$CHILD_PID" 2>/dev/null; then
-        kill -INT "$CHILD_PID" 2>/dev/null || true
+        kill "-$signal_name" "$CHILD_PID" 2>/dev/null || true
         wait "$CHILD_PID" 2>/dev/null || true
     fi
     exit 130

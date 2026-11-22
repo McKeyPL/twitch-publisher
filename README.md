@@ -122,6 +122,8 @@ Start and stop the Linux process manually:
 
 Launcher events are written to `logs/start_sh.log`. SIGINT and SIGTERM are
 forwarded to the active Python process and do not trigger an automatic restart.
+One Ctrl+C lets the current platform upload finish with progress logging before
+the publisher exits. Press Ctrl+C again to interrupt the active operation.
 
 ## Configuration and environment
 

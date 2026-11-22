@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import datetime
+import logging
 from pathlib import Path
 import signal
 import threading
@@ -777,13 +778,54 @@ def test_existing_rumble_file_size_failure_is_migrated_to_skip(
     assert not video.exists()
 
 
-def test_sigint_interrupts_active_operation_immediately() -> None:
+def test_second_sigint_interrupts_active_operation_immediately() -> None:
     event = threading.Event()
+
+    _request_stop(event, signal.SIGINT, None)
+    assert event.is_set()
 
     with pytest.raises(KeyboardInterrupt):
         _request_stop(event, signal.SIGINT, None)
 
-    assert event.is_set() is True
+
+def test_sigint_finishes_rumble_upload_without_starting_another(
+    tmp_path: Path, monkeypatch, caplog,
+) -> None:
+    config = config_for(tmp_path, monkeypatch)
+    first, first_meta = make_recording(config.paths.recordings_root, "first")
+    second, second_meta = make_recording(config.paths.recordings_root, "second")
+    stop_event = threading.Event()
+
+    class InterruptibleTestUploader(FakeUploader):
+        def upload(self, video_path, title, description, tags, srt_path=None):
+            _request_stop(stop_event, signal.SIGINT, None)
+            self._raise_if_cancelled()
+            logging.getLogger("uploaders.rumble").info("rumble: transfer in progress")
+            return super().upload(video_path, title, description, tags, srt_path)
+
+    rumble = InterruptibleTestUploader("rumble", config.retry)
+    youtube = FakeUploader("youtube", config.retry)
+    with StateStore(config.paths.database) as store, caplog.at_level(logging.INFO):
+        process_readiness_results(
+            [
+                ReadinessResult(ReadinessStatus.READY, "ready", first_meta),
+                ReadinessResult(ReadinessStatus.READY, "ready", second_meta),
+            ],
+            config,
+            store,
+            {"rumble": rumble, "youtube": youtube},
+            duration_probe=lambda path: 3600,
+            stop_event=stop_event,
+        )
+        assert store.get_status(first, "rumble").status is UploadStatus.SUCCESS
+        assert store.get_status(second, "rumble") is None
+
+    assert rumble.uploaded == [first]
+    assert youtube.uploaded == []
+    shutdown_message = "Received SIGINT; stopping after the active upload finishes"
+    assert caplog.messages.index(shutdown_message) < caplog.messages.index(
+        "rumble: transfer in progress"
+    )
 
 
 def test_unknown_browser_outcome_is_not_retried_next_cycle(tmp_path: Path, monkeypatch) -> None:
