@@ -464,6 +464,9 @@ def _process_multipart_platform(
     uploader: BaseUploader,
     splitter: MediaSplitter,
     srt_path: Path | None,
+    *,
+    after_upload: Callable[[], None] | None = None,
+    stop_event: threading.Event | None = None,
 ) -> tuple[bool, SplitPlan]:
     """Create/reuse parts and upload only unfinished ones for one platform."""
     parent = state_store.get_status(video_path, platform)
@@ -484,6 +487,8 @@ def _process_multipart_platform(
     total = len(plan.parts)
     failure_message: str | None = None
     for part in plan.parts:
+        if stop_event is not None and stop_event.is_set():
+            break
         record = state_store.get_part_status(
             video_path,
             platform,
@@ -589,6 +594,8 @@ def _process_multipart_platform(
                 total,
                 reason,
             )
+            if after_upload is not None:
+                after_upload()
             continue
         if not result.success:
             error = result.error_message or "Uploader returned success=False"
@@ -608,6 +615,8 @@ def _process_multipart_platform(
                 total,
                 error,
             )
+            if after_upload is not None:
+                after_upload()
             continue
 
         stored_identifier = (
@@ -646,6 +655,8 @@ def _process_multipart_platform(
                 failure_message = (
                     f"Could not add YouTube part {part.index} to playlist"
                 )
+        if after_upload is not None:
+            after_upload()
 
     require_playlist = (
         platform == "youtube"
@@ -712,6 +723,7 @@ def process_ready_recording(
     platform_batch: Mapping[str, BaseUploader] | None = None,
     finalize: bool = True,
     stop_event: threading.Event | None = None,
+    after_upload: Callable[[], None] | None = None,
 ) -> StreamMetadata:
     """Process one ready recording while isolating each platform."""
     batch = uploaders if platform_batch is None else platform_batch
@@ -765,6 +777,7 @@ def process_ready_recording(
     for platform, uploader in batch.items():
         if stop_event is not None and stop_event.is_set():
             break
+        upload_finished = False
         try:
             current = state_store.get_status(video_path, platform)
             if platform == "cda" and current is not None and current.status is UploadStatus.IN_PROGRESS:
@@ -813,6 +826,8 @@ def process_ready_recording(
                     uploader,
                     media_splitter,
                     plan_srt,
+                    after_upload=after_upload if platform != "cda" else None,
+                    stop_event=stop_event,
                 )
                 multipart_plans.append(plan)
                 if platform == "youtube" and not complete:
@@ -898,6 +913,7 @@ def process_ready_recording(
             result = uploader.upload(
                 video_path, title, description, tags, srt_path if platform == "youtube" else None
             )
+            upload_finished = True
             if result.skipped:
                 reason = result.error_message or f"{platform} intentionally skipped the upload"
                 state_store.mark_skipped(video_path, platform, reason)
@@ -958,6 +974,9 @@ def process_ready_recording(
             raise MemoryPressureError(message) from exc
         except Exception as exc:
             _mark_exception_failed(state_store, video_path, platform, exc)
+        finally:
+            if upload_finished and platform != "cda" and after_upload is not None:
+                after_upload()
 
     if not finalize:
         return metadata
@@ -1005,52 +1024,86 @@ def process_readiness_results(
     *,
     duration_probe: DurationProbe | None = None,
     stop_event: threading.Event | None = None,
+    rescan: Callable[[], Sequence[ReadinessResult]] | None = None,
 ) -> None:
     probe = duration_probe or (
         lambda path: probe_duration_seconds(path, ffprobe_path=config.paths.ffprobe)
     )
-    ready = [
-        (result.metadata, None)
-        for result in results
-        if result.status is ReadinessStatus.READY and result.metadata is not None
-    ]
-    batches = [(uploaders, True)]
-    if "cda" in uploaders and len(uploaders) > 1:
-        batches = [
-            ({"cda": uploaders["cda"]}, False),
-            ({name: uploader for name, uploader in uploaders.items() if name != "cda"}, True),
-        ]
-    for batch, finalize in batches:
-        processed: list[tuple[StreamMetadata, float | None]] = []
-        for metadata, duration in ready:
-            if stop_event is not None and stop_event.is_set():
+    prioritize_cda = "cda" in uploaders and len(uploaders) > 1
+    cda_batch = {"cda": uploaders["cda"]} if prioritize_cda else {}
+    remaining_batch = {name: uploader for name, uploader in uploaders.items() if name not in cda_batch}
+    pending: list[tuple[StreamMetadata, float | None]] = []
+    seen: set[Path] = set()
+
+    def stopping() -> bool:
+        return stop_event is not None and stop_event.is_set()
+
+    def queue_ready(scan_results: Sequence[ReadinessResult]) -> None:
+        for result in scan_results:
+            if stopping():
+                return
+            metadata = result.metadata
+            if result.status is not ReadinessStatus.READY or metadata is None:
+                continue
+            if not prioritize_cda:
+                pending.append((metadata, None))
+                continue
+            if metadata.source_path in seen:
+                continue
+            seen.add(metadata.source_path)
+            try:
+                video_path = _video_path_from_metadata(metadata)
+                duration = probe(video_path)
+                metadata = process_ready_recording(
+                    video_path, metadata, duration, config, state_store, uploaders,
+                    platform_batch=cda_batch, finalize=False, stop_event=stop_event,
+                )
+                seen.add(metadata.source_path)
+                pending.append((metadata, duration))
+            except (MemoryError, MemoryPressureError):
+                raise
+            except Exception:
+                logger.exception("Unexpected error while processing a ready recording for CDA")
+
+    def check_for_cda_recordings() -> None:
+        if rescan is None or stopping():
+            return
+        try:
+            new_results = rescan()
+        except (MemoryError, MemoryPressureError):
+            raise
+        except Exception:
+            logger.exception("Could not scan for new CDA recordings")
+            return
+        queue_ready(new_results)
+
+    try:
+        queue_ready(results)
+        # Rescans can append recordings to this queue while it is being drained.
+        for metadata, duration in pending:
+            if stopping():
                 return
             try:
                 video_path = _video_path_from_metadata(metadata)
                 if duration is None:
                     duration = probe(video_path)
-                metadata = process_ready_recording(
+                process_ready_recording(
                     video_path, metadata, duration, config, state_store, uploaders,
-                    platform_batch=batch, finalize=finalize, stop_event=stop_event,
+                    platform_batch=remaining_batch, stop_event=stop_event,
+                    after_upload=check_for_cda_recordings if prioritize_cda else None,
                 )
-                if not finalize:
-                    processed.append((metadata, duration))
-            except MemoryPressureError as exc:
-                logger.warning(
-                    "Memory pressure paused the remaining recordings in this scan: %s",
-                    exc,
-                )
-                return
-            except MemoryError:
-                gc.collect()
-                logger.critical(
-                    "Python raised MemoryError outside an uploader; remaining "
-                    "recordings in this scan were postponed"
-                )
-                return
+            except (MemoryError, MemoryPressureError):
+                raise
             except Exception:
                 logger.exception("Unexpected error while processing a ready recording")
-        ready = processed
+    except MemoryPressureError as exc:
+        logger.warning("Memory pressure paused the remaining recordings in this scan: %s", exc)
+    except MemoryError:
+        gc.collect()
+        logger.critical(
+            "Python raised MemoryError outside an uploader; remaining "
+            "recordings in this scan were postponed"
+        )
 
 
 def run_cycle(
@@ -1065,14 +1118,18 @@ def run_cycle(
 ) -> list[ReadinessResult]:
     global _next_scan_summary
     logger.debug("Starting recording scan: %s", config.paths.recordings_root)
-    results = scan_cycle(
-        config.paths.recordings_root,
-        tracker,
-        config.moving.uploaded_directory_name,
-        excluded_directory_names=[config.splitting.work_directory_name],
-        channel_aliases=config.watcher.channel_aliases,
-        now=now,
-    )
+
+    def scan() -> list[ReadinessResult]:
+        return scan_cycle(
+            config.paths.recordings_root,
+            tracker,
+            config.moving.uploaded_directory_name,
+            excluded_directory_names=[config.splitting.work_directory_name],
+            channel_aliases=config.watcher.channel_aliases,
+            now=now,
+        )
+
+    results = scan()
     ready_count = sum(
         result.status is ReadinessStatus.READY for result in results
     )
@@ -1088,7 +1145,7 @@ def run_cycle(
         _next_scan_summary = summary_time + 900
     process_readiness_results(
         results, config, state_store, uploaders,
-        duration_probe=duration_probe, stop_event=stop_event,
+        duration_probe=duration_probe, stop_event=stop_event, rescan=scan,
     )
     return results
 

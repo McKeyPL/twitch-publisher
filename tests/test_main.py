@@ -10,13 +10,14 @@ import threading
 import pytest
 
 from config import Config, load_config
-from duration_check import ReadinessResult, ReadinessStatus
+from duration_check import FileSizeStabilityTracker, ReadinessResult, ReadinessStatus
 from main import (
     _request_stop,
     build_parser,
     build_uploaders,
     process_readiness_results,
     process_ready_recording,
+    run_cycle,
 )
 from media_splitter import MediaPart, SplitPlan
 from memory_guard import MemoryPressureError
@@ -351,6 +352,49 @@ def test_scan_attempts_all_cda_uploads_before_other_platforms(tmp_path: Path, mo
         ("youtube", second), ("rumble", second),
     ]
     assert first.is_file() and second.is_file()
+
+
+def test_cycle_rescans_for_cda_between_other_platform_uploads(tmp_path: Path, monkeypatch) -> None:
+    config = config_for(tmp_path, monkeypatch)
+    first, first_meta = make_recording(config.paths.recordings_root, "first")
+    second, second_meta = make_recording(config.paths.recordings_root, "second")
+    first_ready = ReadinessResult(ReadinessStatus.READY, "ready", first_meta)
+    second_ready = ReadinessResult(ReadinessStatus.READY, "ready", second_meta)
+    calls = []
+
+    class RecordingUploader(FakeUploader):
+        def upload(self, video_path, title, description, tags, srt_path=None):
+            calls.append((self.name, video_path))
+            return super().upload(video_path, title, description, tags, srt_path)
+
+    scans = iter([
+        [first_ready],
+        [first_ready, second_ready],
+        [first_ready, second_ready],
+        [second_ready],
+        [second_ready],
+    ])
+    monkeypatch.setattr("main.scan_cycle", lambda *args, **kwargs: next(scans))
+    uploaders = {
+        name: RecordingUploader(name, config.retry)
+        for name in ("youtube", "cda", "rumble")
+    }
+    with StateStore(config.paths.database) as store:
+        run_cycle(
+            config, store, FileSizeStabilityTracker(), uploaders,
+            duration_probe=lambda path: 3600,
+        )
+
+    assert calls == [
+        ("cda", first),
+        ("youtube", first),
+        ("cda", second),
+        ("rumble", first),
+        ("youtube", second),
+        ("rumble", second),
+    ]
+    assert not first.exists() and not second.exists()
+    assert next(scans, None) is None
 
 
 def test_invalid_readiness_result_does_not_block_ready_file(tmp_path: Path, monkeypatch) -> None:
