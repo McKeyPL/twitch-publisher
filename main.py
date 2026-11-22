@@ -707,10 +707,13 @@ def process_ready_recording(
     uploaders: Mapping[str, BaseUploader],
     *,
     media_splitter: MediaSplitter | None = None,
-) -> None:
+    platform_batch: Mapping[str, BaseUploader] | None = None,
+    finalize: bool = True,
+) -> StreamMetadata:
     """Process one ready recording while isolating each platform."""
+    batch = uploaders if platform_batch is None else platform_batch
     if (
-        "cda" in uploaders
+        "cda" in batch
         and config.platforms.cda.normalize_filename
     ):
         normalized = normalize_recording_set_for_cda(
@@ -756,7 +759,7 @@ def process_ready_recording(
     youtube_uploaded_this_cycle = False
     youtube_finalization_complete = True
 
-    for platform, uploader in uploaders.items():
+    for platform, uploader in batch.items():
         try:
             current = state_store.get_status(video_path, platform)
             if platform == "cda" and current is not None and current.status is UploadStatus.IN_PROGRESS:
@@ -951,6 +954,9 @@ def process_ready_recording(
         except Exception as exc:
             _mark_exception_failed(state_store, video_path, platform, exc)
 
+    if not finalize:
+        return metadata
+
     if "youtube" in uploaders and youtube_uploaded_this_cycle:
         youtube_finalization_complete = _youtube_finalization_complete(
             video_path,
@@ -966,7 +972,7 @@ def process_ready_recording(
             "youtube: keeping source files until captions and playlist "
             "finalization succeeds"
         )
-        return
+        return metadata
 
     move_result = move_processed_recording(
         video_path, config, state_store, required_platforms
@@ -983,6 +989,7 @@ def process_ready_recording(
                 )
     for warning in move_result.warnings:
         logger.warning("Mover: %s", warning)
+    return metadata
 
 
 def process_readiness_results(
@@ -996,30 +1003,46 @@ def process_readiness_results(
     probe = duration_probe or (
         lambda path: probe_duration_seconds(path, ffprobe_path=config.paths.ffprobe)
     )
-    for result in results:
-        if result.status is not ReadinessStatus.READY or result.metadata is None:
-            continue
-        try:
-            video_path = _video_path_from_metadata(result.metadata)
-            duration = probe(video_path)
-            process_ready_recording(
-                video_path, result.metadata, duration, config, state_store, uploaders
-            )
-        except MemoryPressureError as exc:
-            logger.warning(
-                "Memory pressure paused the remaining recordings in this scan: %s",
-                exc,
-            )
-            break
-        except MemoryError:
-            gc.collect()
-            logger.critical(
-                "Python raised MemoryError outside an uploader; remaining "
-                "recordings in this scan were postponed"
-            )
-            break
-        except Exception:
-            logger.exception("Unexpected error while processing a ready recording")
+    ready = [
+        (result.metadata, None)
+        for result in results
+        if result.status is ReadinessStatus.READY and result.metadata is not None
+    ]
+    batches = [(uploaders, True)]
+    if "cda" in uploaders and len(uploaders) > 1:
+        batches = [
+            ({"cda": uploaders["cda"]}, False),
+            ({name: uploader for name, uploader in uploaders.items() if name != "cda"}, True),
+        ]
+    for batch, finalize in batches:
+        processed: list[tuple[StreamMetadata, float | None]] = []
+        for metadata, duration in ready:
+            try:
+                video_path = _video_path_from_metadata(metadata)
+                if duration is None:
+                    duration = probe(video_path)
+                metadata = process_ready_recording(
+                    video_path, metadata, duration, config, state_store, uploaders,
+                    platform_batch=batch, finalize=finalize,
+                )
+                if not finalize:
+                    processed.append((metadata, duration))
+            except MemoryPressureError as exc:
+                logger.warning(
+                    "Memory pressure paused the remaining recordings in this scan: %s",
+                    exc,
+                )
+                return
+            except MemoryError:
+                gc.collect()
+                logger.critical(
+                    "Python raised MemoryError outside an uploader; remaining "
+                    "recordings in this scan were postponed"
+                )
+                return
+            except Exception:
+                logger.exception("Unexpected error while processing a ready recording")
+        ready = processed
 
 
 def run_cycle(

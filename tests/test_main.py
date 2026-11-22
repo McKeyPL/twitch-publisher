@@ -315,6 +315,43 @@ def test_uploader_exception_does_not_block_next_platform_or_file(tmp_path: Path,
     assert uploaders["rumble"].uploaded == [first, second]
 
 
+def test_scan_attempts_all_cda_uploads_before_other_platforms(tmp_path: Path, monkeypatch) -> None:
+    config = config_for(tmp_path, monkeypatch)
+    first, first_meta = make_recording(config.paths.recordings_root, "first")
+    second, second_meta = make_recording(config.paths.recordings_root, "second")
+    uploaders = successful_uploaders(config)
+    uploaders["cda"].result = UploadResult(False, error_message="CDA failure")
+    calls = []
+
+    class RecordingUploader(FakeUploader):
+        def upload(self, video_path, title, description, tags, srt_path=None):
+            calls.append((self.name, video_path))
+            return super().upload(video_path, title, description, tags, srt_path)
+
+    uploaders = {
+        name: RecordingUploader(name, config.retry, result=uploader.result)
+        for name, uploader in uploaders.items()
+    }
+    with StateStore(config.paths.database) as store:
+        process_readiness_results(
+            [
+                ReadinessResult(ReadinessStatus.READY, "ready", first_meta),
+                ReadinessResult(ReadinessStatus.READY, "ready", second_meta),
+            ],
+            config,
+            store,
+            uploaders,
+            duration_probe=lambda path: 3600,
+        )
+
+    assert calls == [
+        ("cda", first), ("cda", second),
+        ("youtube", first), ("rumble", first),
+        ("youtube", second), ("rumble", second),
+    ]
+    assert first.is_file() and second.is_file()
+
+
 def test_invalid_readiness_result_does_not_block_ready_file(tmp_path: Path, monkeypatch) -> None:
     config = config_for(tmp_path, monkeypatch)
     video, metadata = make_recording(config.paths.recordings_root)
