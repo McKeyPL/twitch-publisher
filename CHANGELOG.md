@@ -1,5 +1,22 @@
 # Changelog
 
+## v3.1.1
+
+- **CDA uploads first.** The publisher attempts CDA for every ready recording
+  before starting YouTube or Rumble. After each YouTube or Rumble transfer,
+  including split parts, it checks for newly ready recordings and gives CDA
+  priority before the next transfer.
+- **Finish the current upload on Ctrl+C.** The first press keeps progress
+  logging active and lets the current transfer finish before exiting. The
+  second press interrupts it. Playwright runs separately from the terminal
+  so the first press leaves CDA and Rumble browser sessions open.
+- **Accept seven-digit timestamps.** Recording metadata with seven fractional
+  digits in `Started` or `Ended` now parses on Python 3.10 with its timezone
+  offset preserved.
+- **Identify waiting recordings in the log file.** Each scan summary on disk
+  includes the MKV path and wait reason for each pending recording. The
+  console keeps its concise summary.
+
 ## v3.0.0
 
 > [!CAUTION]
