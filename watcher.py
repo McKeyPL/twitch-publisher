@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 from collections.abc import Iterable, Iterator, Mapping
+from dataclasses import replace
 from pathlib import Path
 
 from duration_check import (
@@ -100,7 +101,7 @@ def scan_cycle(
             channel_aliases=channel_aliases,
             now=now,
         )
-        results.append(result)
+        results.append(replace(result, video_path=video_path))
         if result.status is not ReadinessStatus.READY:
             logger.debug("Recording is waiting: %s - %s", video_path, result.reason)
         else:

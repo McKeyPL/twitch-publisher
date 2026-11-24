@@ -15,6 +15,7 @@ from main import (
     _request_stop,
     build_parser,
     build_uploaders,
+    configure_logging,
     process_readiness_results,
     process_ready_recording,
     run_cycle,
@@ -352,6 +353,37 @@ def test_scan_attempts_all_cda_uploads_before_other_platforms(tmp_path: Path, mo
         ("youtube", second), ("rumble", second),
     ]
     assert first.is_file() and second.is_file()
+
+
+def test_scan_logs_waiting_file_details_only_to_disk(tmp_path: Path, monkeypatch, capsys) -> None:
+    config = config_for(tmp_path, monkeypatch)
+    video, metadata = make_recording(config.paths.recordings_root)
+    metadata.source_path.write_text(
+        "Channel : mrozopl\nTitle : Stream\n"
+        "Started : 2026-07-12T17:00:00\nEnded : 2026-07-12T18:00:00\n",
+        encoding="utf-8",
+    )
+    orphan = video.with_name("missing-metadata.mkv")
+    orphan.write_bytes(b"video")
+    root = logging.getLogger()
+    previous_level = root.level
+    monkeypatch.setattr(root, "handlers", [])
+    monkeypatch.setattr("main._next_scan_summary", 0.0)
+    configure_logging(config)
+    try:
+        with StateStore(config.paths.database) as store:
+            run_cycle(config, store, FileSizeStabilityTracker(), {}, now=100)
+    finally:
+        for handler in root.handlers:
+            handler.close()
+        root.setLevel(previous_level)
+
+    console = capsys.readouterr().err
+    file_log = (config.paths.log_directory / config.logging.file_name).read_text(encoding="utf-8")
+    assert "Recording scan finished: candidates=2, ready=0, waiting=2" in console
+    assert str(video) not in console and str(orphan) not in console
+    assert f"{video} - Waiting for the second MKV size sample" in file_log
+    assert f"{orphan} - _meta.txt is missing" in file_log
 
 
 def test_cycle_rescans_for_cda_between_other_platform_uploads(tmp_path: Path, monkeypatch) -> None:

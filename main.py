@@ -90,6 +90,7 @@ def configure_logging(config: Config) -> None:
         datefmt="%Y-%m-%d %H:%M:%S",
     )
     console = logging.StreamHandler()
+    console.addFilter(lambda record: not getattr(record, "file_only", False))
     console.setFormatter(_ColorFormatter(formatter._fmt, datefmt=formatter.datefmt) if config.logging.console_colors else formatter)
     file_handler = BoundedLogHandler(
         config.paths.log_directory / config.logging.file_name,
@@ -1135,13 +1136,18 @@ def run_cycle(
     )
     summary_time = time.monotonic()
     if summary_time >= _next_scan_summary:
-        waiting = Counter(
-            result.reason for result in results if result.status is not ReadinessStatus.READY
-        )
+        waiting = [result for result in results if not result.ready]
+        reasons = Counter(result.reason for result in waiting)
         logger.info(
             "Recording scan finished: candidates=%d, ready=%d, waiting=%d; top reasons: %s",
-            len(results), ready_count, len(results) - ready_count, waiting.most_common(5),
+            len(results), ready_count, len(waiting), reasons.most_common(5),
         )
+        for result in waiting:
+            if result.video_path is not None:
+                logger.info(
+                    "Recording is waiting: %s - %s", result.video_path, result.reason,
+                    extra={"file_only": True},
+                )
         _next_scan_summary = summary_time + 900
     process_readiness_results(
         results, config, state_store, uploaders,

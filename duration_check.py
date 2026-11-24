@@ -32,6 +32,7 @@ class ReadinessResult:
     status: ReadinessStatus
     reason: str
     metadata: StreamMetadata | None = None
+    video_path: Path | None = None
 
     @property
     def ready(self) -> bool:
